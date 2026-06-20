@@ -369,23 +369,28 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     throw new Error(`navigate: url blocked by managed policy: ${url}`);
   }
 
-  // Find or create the console tab.
-  const existing = await chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS });
-  if (existing.length > 0 && existing[0].id !== undefined) {
-    targetTabId = existing[0].id;
-  } else {
-    const created = await chrome.tabs.create({ url });
-    if (created.id === undefined) {
-      throw new Error("navigate: failed to create console tab");
+  // Always create a fresh tab for reliability: after an extension reload, the
+  // prior tab's content scripts are gone and Chrome may not re-inject on a
+  // same-URL "navigation." A fresh tab guarantees a clean page load + content
+  // script injection. Close any stale console tabs from prior runs.
+  const stale = await chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS });
+  for (const t of stale) {
+    if (t.id !== undefined) {
+      try { await chrome.tabs.remove(t.id); } catch { /* tab may already be closed */ }
     }
-    targetTabId = created.id;
   }
+  // Clear any debugger attachments to the old tabs.
+  attachedTabs.clear();
+
+  const created = await chrome.tabs.create({ url, active: true });
+  if (created.id === undefined) {
+    throw new Error("navigate: failed to create console tab");
+  }
+  targetTabId = created.id;
 
   const tabId = targetTabId;
 
-  await chrome.tabs.update(tabId, { url, active: true });
-
-  // Wait for navigation to complete on that tab (race with a timeout).
+  // Wait for navigation to complete on the new tab (race with a timeout).
   await waitForNavigation(tabId);
 
   // After extension reload or "same URL" navigation, the manifest content_scripts
