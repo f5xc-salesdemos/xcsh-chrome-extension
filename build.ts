@@ -30,6 +30,7 @@ await Bun.build({
 });
 
 fs.copyFileSync("manifest.json", "dist/manifest.json");
+fs.copyFileSync("managed_schema.json", "dist/managed_schema.json");
 fs.copyFileSync("src/options.html", "dist/options.html");
 
 // Copy branded icons.

@@ -25,6 +25,9 @@
     "https://*.volterra.us/*",
     "https://*.console.ves.volterra.io/*"
   ],
+  "storage": {
+    "managed_schema": "managed_schema.json"
+  },
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"

@@ -15,8 +15,60 @@ import {
 
 const NATIVE_HOST = "com.f5xc.xcsh.chrome_host";
 const RECONNECT_ALARM = "reconnect";
+const MANAGED_POLICY_ALARM = "managed-policy-refresh";
 const VERSION = "0.1.0";
 const NAV_TIMEOUT_MS = 30_000;
+
+// Max size of code accepted by `javascript_tool` (defense-in-depth, Phase 1).
+const MAX_JS_CODE_LEN = 100_000;
+
+// --- Managed enterprise policy (chrome.storage.managed) --------------------
+//
+// Keys come from `managed_schema.json` and are pushed by enterprise policy
+// (e.g. Google Admin console / Windows GPO / macOS plist). The schema is
+// advisory only; managed storage is read-only to the extension.
+type ManagedPolicy = {
+  allowedDomains?: string[];
+  blockedUrlPatterns?: string[];
+  // Phase 3: documented no-op stub. The permission_request/response bridge
+  // protocol that would consume this is deferred to a later phase. We read +
+  // cache the value so it is observable, but it does not gate anything yet.
+  confirmBeforeMutating?: boolean;
+};
+
+let managedPolicy: ManagedPolicy = {};
+
+async function refreshManagedPolicy(): Promise<void> {
+  try {
+    const stored = await chrome.storage.managed.get([
+      "allowedDomains",
+      "blockedUrlPatterns",
+      "confirmBeforeMutating",
+    ]);
+    managedPolicy = {
+      allowedDomains: Array.isArray(stored.allowedDomains)
+        ? (stored.allowedDomains as string[])
+        : undefined,
+      blockedUrlPatterns: Array.isArray(stored.blockedUrlPatterns)
+        ? (stored.blockedUrlPatterns as string[])
+        : undefined,
+      confirmBeforeMutating:
+        typeof stored.confirmBeforeMutating === "boolean"
+          ? (stored.confirmBeforeMutating as boolean)
+          : undefined,
+    };
+  } catch {
+    // No managed storage configured (common in dev / unmanaged installs).
+    // Leave the cached policy as-is.
+  }
+}
+
+/** True if `url` matches any configured blocked pattern (substring match). */
+function isBlockedUrl(url: string): boolean {
+  const patterns = managedPolicy.blockedUrlPatterns;
+  if (!patterns || patterns.length === 0) return false;
+  return patterns.some((p) => typeof p === "string" && p.length > 0 && url.includes(p));
+}
 
 // Scoped console URL patterns (also the host_permissions in the manifest).
 const SCOPED_QUERY_PATTERNS = [
@@ -131,11 +183,26 @@ function onMessage(msg: any): void {
 // Connect on SW startup.
 connect();
 
+// Read the managed enterprise policy on startup.
+refreshManagedPolicy();
+
+// Re-read the managed policy if enterprise policy changes at runtime.
+chrome.storage.onChanged.addListener((_changes, areaName) => {
+  if (areaName === "managed") {
+    refreshManagedPolicy();
+  }
+});
+
 // Reconnect alarm (~0.5 min) — reconnects whenever the port has been nulled.
 chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
+// Managed-policy refresh alarm (~5 min) — picks up policy pushes even if the
+// onChanged event was missed while the SW was suspended.
+chrome.alarms.create(MANAGED_POLICY_ALARM, { periodInMinutes: 5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RECONNECT_ALARM && !port) {
     connect();
+  } else if (alarm.name === MANAGED_POLICY_ALARM) {
+    refreshManagedPolicy();
   }
 });
 
@@ -273,6 +340,25 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   const url = params?.url;
   if (typeof url !== "string" || !isScopedUrl(url)) {
     throw new Error(`navigate: url not in scoped console domains: ${url}`);
+  }
+
+  // Defense-in-depth (Phase 1 finding): only allow https. `isScopedUrl`
+  // already enforces an https:// prefix, but validate the parsed scheme
+  // explicitly so http:/file:/javascript:/data:/blob: can never slip through.
+  let scheme: string;
+  try {
+    scheme = new URL(url).protocol;
+  } catch {
+    throw new Error(`navigate: invalid url: ${url}`);
+  }
+  if (scheme !== "https:") {
+    throw new Error(`navigate: only https: urls are allowed, got ${scheme}`);
+  }
+
+  // Enterprise policy override: refuse URLs matching any blocked pattern,
+  // even within otherwise-allowed console domains.
+  if (isBlockedUrl(url)) {
+    throw new Error(`navigate: url blocked by managed policy: ${url}`);
   }
 
   // Find or create the console tab.
@@ -586,6 +672,16 @@ async function javascriptTool(params: {
   code: string;
 }): Promise<{ result: unknown }> {
   const tabId = requireTab();
+  // Defense-in-depth (Phase 1 finding): cap evaluated code size.
+  const code = params?.code;
+  if (typeof code !== "string") {
+    throw new Error("javascript_tool: code is required");
+  }
+  if (code.length > MAX_JS_CODE_LEN) {
+    throw new Error(
+      `javascript_tool: code too large (${code.length} > ${MAX_JS_CODE_LEN})`,
+    );
+  }
   // Domain-scope: the tab's current URL must be a scoped console URL.
   const tab = await chrome.tabs.get(tabId);
   if (typeof tab.url !== "string" || !isScopedUrl(tab.url)) {
@@ -595,7 +691,7 @@ async function javascriptTool(params: {
   }
   await ensureDebuggerAttached(tabId);
   const result = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
-    expression: params.code,
+    expression: code,
     returnByValue: true,
     awaitPromise: true,
   })) as any;
@@ -629,6 +725,9 @@ async function tabsCreate(params: {
   const url = params?.url;
   if (typeof url !== "string" || !isScopedUrl(url)) {
     throw new Error(`tabs_create: url not in scoped console domains: ${url}`);
+  }
+  if (isBlockedUrl(url)) {
+    throw new Error(`tabs_create: url blocked by managed policy: ${url}`);
   }
   const tab = await chrome.tabs.create({ url, active: true });
   if (tab.id !== undefined) targetTabId = tab.id;

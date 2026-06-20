@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "allowedDomains": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Domain patterns the extension is permitted to automate. Default: the F5 XC console patterns."
+    },
+    "blockedUrlPatterns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "URL patterns the extension must refuse to navigate to, even within allowed domains. IT overrides."
+    },
+    "confirmBeforeMutating": {
+      "type": "boolean",
+      "description": "When true, the extension gates destructive workflow steps (delete, modify security) on per-turn user confirmation via the bridge."
+    }
+  }
+}
