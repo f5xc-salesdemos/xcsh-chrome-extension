@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseHTML } from "linkedom";
+import { commitInputValue } from "../src/accessibility-tree";
 import { serializeAx, type AxRefNode } from "../src/ax-serialize";
 
 function flatten(tree: AxRefNode): string[] {
@@ -59,5 +60,53 @@ describe("serializeAx", () => {
     expect(flat.length).toBe(2);
     // refMap holds exactly the serialized nodes (main + button).
     expect(refMap.size).toBe(2);
+  });
+});
+
+describe("commitInputValue (ported from xcsh input-commit.ts)", () => {
+  it("sets value via the prototype setter, bypassing an instance-patched descriptor", () => {
+    let nativeStored = "";
+    const proto = {};
+    Object.defineProperty(proto, "value", {
+      configurable: true,
+      get() {
+        return nativeStored;
+      },
+      set(v: string) {
+        nativeStored = v;
+      },
+    });
+    const el: any = Object.create(proto);
+    let patchedCalled = false;
+    Object.defineProperty(el, "value", {
+      configurable: true,
+      get() {
+        return nativeStored;
+      },
+      set() {
+        patchedCalled = true;
+      },
+    });
+    const events: string[] = [];
+    el.dispatchEvent = (e: any) => {
+      events.push(e.type);
+      return true;
+    };
+    el.ownerDocument = {
+      defaultView: {
+        Event: class {
+          type: string;
+          bubbles: boolean;
+          constructor(t: string, o?: any) {
+            this.type = t;
+            this.bubbles = !!o?.bubbles;
+          }
+        },
+      },
+    };
+    commitInputValue(el, "x.example.com");
+    expect(nativeStored).toBe("x.example.com");
+    expect(patchedCalled).toBe(false);
+    expect(events).toEqual(["input", "change", "blur", "focusout"]);
   });
 });
