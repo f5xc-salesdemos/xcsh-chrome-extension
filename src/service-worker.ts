@@ -63,11 +63,19 @@ async function refreshManagedPolicy(): Promise<void> {
   }
 }
 
-/** True if `url` matches any configured blocked pattern (substring match). */
+/** True if `url` matches any configured blocked pattern (normalized, case-insensitive). */
 function isBlockedUrl(url: string): boolean {
   const patterns = managedPolicy.blockedUrlPatterns;
   if (!patterns || patterns.length === 0) return false;
-  return patterns.some((p) => typeof p === "string" && p.length > 0 && url.includes(p));
+  // Normalize: decode percent-encoding + lowercase to prevent bypass via encoding tricks.
+  let normalized: string;
+  try {
+    const parsed = new URL(url);
+    normalized = decodeURIComponent(`${parsed.origin}${parsed.pathname}${parsed.search}`).toLowerCase();
+  } catch {
+    normalized = decodeURIComponent(url).toLowerCase();
+  }
+  return patterns.some((p) => typeof p === "string" && p.length > 0 && normalized.includes(p.toLowerCase()));
 }
 
 // Scoped console URL patterns (also the host_permissions in the manifest).
