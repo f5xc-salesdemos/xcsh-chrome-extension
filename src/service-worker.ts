@@ -428,11 +428,23 @@ function requireTab(): number {
 /** Run `__xcshReadAx()` in the target tab and return the AX tree. */
 async function readAxFromTab(): Promise<AxNode> {
   const tabId = requireTab();
-  const result = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => (globalThis as any).__xcshReadAx(),
-  });
-  return result[0]?.result as AxNode;
+  // The content script installs __xcshReadAx in the ISOLATED world (same as
+  // executeScript's default). Retry briefly if the content script hasn't
+  // initialized yet (e.g., right after a navigation).
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => (globalThis as any).__xcshReadAx?.() ?? null,
+      });
+      const tree = result[0]?.result;
+      if (tree && typeof tree === "object" && "role" in tree) return tree as AxNode;
+    } catch {
+      // executeScript can fail if the page is still loading / navigating.
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  throw new Error("read_ax: content script __xcshReadAx not available (page may still be loading)");
 }
 
 async function readAx(): Promise<unknown> {
@@ -841,6 +853,17 @@ async function browserBatch(params: {
 
 async function ensureDebuggerAttached(tabId: number): Promise<void> {
   if (attachedTabs.has(tabId)) return;
+  // Verify the tab is on a console domain before attaching — chrome.debugger
+  // rejects chrome://, chrome-extension://, and other restricted URLs.
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.url && !isScopedUrl(tab.url)) {
+      throw new Error(`tab ${tabId} is on ${tab.url} (not a console domain) — call navigate first`);
+    }
+  } catch (e: any) {
+    if (/not a console domain/i.test(e?.message ?? "")) throw e;
+    // tabs.get can fail if the tab was closed — let attach try + fail naturally.
+  }
   try {
     await chrome.debugger.attach({ tabId }, "1.3");
     attachedTabs.add(tabId);
