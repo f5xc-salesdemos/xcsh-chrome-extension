@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "F5 XC Console Agent",
-  "description": "Purpose-built browser automation for the F5 Distributed Cloud admin console, powered by xcsh.",
+  "name": "xcsh",
+  "description": "xcsh — AI-driven automation for the F5 Distributed Cloud console.",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
   "icons": {

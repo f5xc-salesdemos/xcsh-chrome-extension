@@ -27,7 +27,7 @@ function showIndicator(): void {
   badge.style.cssText =
     "position:fixed;top:8px;right:8px;z-index:2147483647;background:#E4002B;color:#fff;font:600 13px/1 Inter,system-ui,sans-serif;padding:6px 14px;border-radius:6px;display:flex;align-items:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:default;";
   badge.innerHTML =
-    '<span style="font-size:11px">⬢</span> F5 XC Agent <button style="background:none;border:none;color:#fff;cursor:pointer;font-size:16px;line-height:1;padding:0 0 0 4px" title="Stop">✕</button>';
+    '<span style="font-size:11px">⬢</span> xcsh <button style="background:none;border:none;color:#fff;cursor:pointer;font-size:16px;line-height:1;padding:0 0 0 4px" title="Stop">✕</button>';
   badge.querySelector("button")!.addEventListener("click", () => {
     chrome.runtime.sendMessage({ type: "stop_agent" });
   });

@@ -568,15 +568,19 @@ async function click(params: {
   return { clicked: ref, x, y };
 }
 
-async function screenshot(): Promise<{ data: string }> {
+async function screenshot(): Promise<{ data: string; format: string }> {
   const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
+  // Native messaging caps a single message at ~1 MB. A full-resolution PNG of
+  // the console easily exceeds that and silently stalls the bridge. Capture
+  // JPEG at reduced quality, clipped to the viewport, to stay well under the
+  // limit (mirrors the Anthropic extension's downscale-for-transport approach).
   const result = (await chrome.debugger.sendCommand(
     { tabId },
     "Page.captureScreenshot",
-    { format: "png" },
+    { format: "jpeg", quality: 60, captureBeyondViewport: false },
   )) as { data: string };
-  return { data: result.data };
+  return { data: result.data, format: "jpeg" };
 }
 
 async function formInput(params: {
