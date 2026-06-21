@@ -404,19 +404,44 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   // Wait for navigation to complete on the new tab (race with a timeout).
   await waitForNavigation(tabId);
 
-  // After extension reload or "same URL" navigation, the manifest content_scripts
-  // may NOT re-inject. Programmatically inject the accessibility-tree content script
-  // so __xcshReadAx is always available on the new page.
-  try {
-    await chrome.scripting.executeScript({
-          target: { tabId, allFrames: true },
-      files: ["accessibility-tree.js"],
-    });
-  } catch {
-    // Non-fatal: the content script may have already been injected by the manifest.
-  }
+  // The XC console is a heavy Angular SPA — webNavigation.onCompleted fires on
+  // the initial HTML, long before the app renders its content. Wait for the DOM
+  // to settle so read_ax/find see the real content, not the loading shell.
+  await waitForSettle(tabId);
 
   return { tabId };
+}
+
+/**
+ * Wait for the XC Angular SPA to finish rendering: poll the DOM element count
+ * until it is non-trivial and stable across several polls, or a timeout. This
+ * is what makes navigate → read_ax deterministic on the SPA.
+ */
+async function waitForSettle(tabId: number, timeoutMs = 15_000): Promise<void> {
+  try {
+    await ensureDebuggerAttached(tabId);
+  } catch {
+    return; // can't attach (e.g. mid-redirect) — skip settle, caller still works
+  }
+  let last = -1;
+  let stable = 0;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && stable < 3) {
+    let count = 0;
+    try {
+      const r = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+        expression: "document.querySelectorAll('*').length",
+        returnByValue: true,
+      })) as { result?: { value?: number } };
+      count = r?.result?.value ?? 0;
+    } catch {
+      /* navigation in progress — retry */
+    }
+    if (count > 50 && count === last) stable++;
+    else stable = 0;
+    last = count;
+    await new Promise((r) => setTimeout(r, 500));
+  }
 }
 
 /**
@@ -548,15 +573,7 @@ async function login(params: {
 
     if (isScopedUrl(url) && !isLoginUrl(url)) {
       steps.push(`302 → console (${new URL(url).hostname}) — authenticated`);
-      // Re-inject the content script onto the freshly-loaded console page.
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId, allFrames: true },
-          files: ["accessibility-tree.js"],
-        });
-      } catch {
-        /* manifest may have injected already */
-      }
+      await waitForSettle(tabId); // let the console SPA render before returning
       return { loggedIn: true, finalUrl: url, steps };
     }
 
@@ -724,18 +741,18 @@ async function click(params: {
 
 async function screenshot(): Promise<{ data: string; format: string }> {
   const tabId = requireTab();
-  // Use chrome.tabs.captureVisibleTab (NOT chrome.debugger Page.captureScreenshot,
-  // which hangs on the XC SPA). It returns a JPEG data URL of the visible tab —
-  // no debugger needed, and JPEG q60 keeps the base64 under the ~1MB native-
-  // messaging message limit. The tab must be active in its window to be captured.
-  const tab = await chrome.tabs.get(tabId);
-  await chrome.tabs.update(tabId, { active: true });
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-    format: "jpeg",
-    quality: 60,
-  });
-  const data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
-  return { data, format: "jpeg" };
+  await ensureDebuggerAttached(tabId);
+  // Page.enable is required before captureScreenshot; JPEG q50 clipped to the
+  // viewport keeps the base64 under the ~1MB native-messaging message limit.
+  // (chrome.tabs.captureVisibleTab needs activeTab/<all_urls>, which we lack
+  // when driving programmatically — so use the debugger path instead.)
+  await chrome.debugger.sendCommand({ tabId }, "Page.enable", {});
+  const result = (await chrome.debugger.sendCommand(
+    { tabId },
+    "Page.captureScreenshot",
+    { format: "jpeg", quality: 50, captureBeyondViewport: false },
+  )) as { data: string };
+  return { data: result.data, format: "jpeg" };
 }
 
 async function formInput(params: {
