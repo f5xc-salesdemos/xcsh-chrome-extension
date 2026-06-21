@@ -451,7 +451,6 @@ async function readAxFromTab(): Promise<AxNode> {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const result = await chrome.scripting.executeScript({
-        world: 'MAIN',
     target: { tabId },
         func: () => (globalThis as any).__xcshReadAx?.() ?? null,
       });
@@ -503,7 +502,6 @@ async function assertText(params: {
   const tree = await readAxFromTab();
   const node = matchNode(tree, parseLocator(selector));
   const [result] = await chrome.scripting.executeScript({
-    world: 'MAIN',
     target: { tabId },
     func: (r: string) => (globalThis as any).__xcshGetInnerText(r),
     args: [node.ref as string],
@@ -540,7 +538,6 @@ async function click(params: {
 
   // Resolve the ref to viewport coords inside the page.
   const resolved = await chrome.scripting.executeScript({
-    world: 'MAIN',
     target: { tabId },
     func: (r: string) => (globalThis as any).__xcshResolveRef(r),
     args: [ref],
@@ -592,7 +589,6 @@ async function formInput(params: {
 
   // Commit the value via the content-script helper (handles vsui-input quirks).
   const result = await chrome.scripting.executeScript({
-    world: 'MAIN',
     target: { tabId },
     func: (r: string, v: string) =>
       (globalThis as any).__xcshCommitInputValue(r, v),
@@ -676,7 +672,6 @@ async function selectOption(params: {
   const tabId = requireTab();
   const { ref, value } = params;
   const [r] = await chrome.scripting.executeScript({
-    world: 'MAIN',
     target: { tabId },
     func: (rr: string, vv: string) =>
       (globalThis as any).__xcshSelectOption(rr, vv),
@@ -692,7 +687,6 @@ async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> 
   const tabId = requireTab();
   const { ref } = params;
   await chrome.scripting.executeScript({
-    world: 'MAIN',
     target: { tabId },
     func: (rr: string) => (globalThis as any).__xcshScrollTo(rr),
     args: [ref],
@@ -703,7 +697,6 @@ async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> 
 async function getPageText(): Promise<{ text: string }> {
   const tabId = requireTab();
   const [r] = await chrome.scripting.executeScript({
-    world: 'MAIN',
     target: { tabId },
     func: () => (globalThis as any).__xcshGetPageText(),
   });
