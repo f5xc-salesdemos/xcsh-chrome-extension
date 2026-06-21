@@ -420,9 +420,13 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
           window.onbeforeunload = null;
           // Override addEventListener to silently drop any beforeunload registrations.
           const origAdd = EventTarget.prototype.addEventListener;
-          EventTarget.prototype.addEventListener = function (type: string, ...rest: any[]) {
+          EventTarget.prototype.addEventListener = function (
+            type: string,
+            listener: EventListenerOrEventListenerObject | null,
+            options?: boolean | AddEventListenerOptions,
+          ) {
             if (type === "beforeunload") return; // silently drop
-            return origAdd.call(this, type, ...rest);
+            return origAdd.call(this, type, listener, options);
           };
           // Also override the onbeforeunload setter so direct assignment is a no-op.
           Object.defineProperty(window, "onbeforeunload", {
