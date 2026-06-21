@@ -434,10 +434,37 @@ async function login(params: {
   if (!email || !password || !consoleUrl) {
     throw new Error("login: email, password, and consoleUrl are required");
   }
+  // Only the console domain is a valid login target — reject anything else so
+  // credentials can never be navigated to / injected into a foreign host.
+  let consoleHost: string;
+  try {
+    const parsed = new URL(consoleUrl);
+    consoleHost = parsed.hostname;
+    if (parsed.protocol !== "https:" || !isScopedUrl(consoleUrl)) {
+      throw new Error("not a console URL");
+    }
+  } catch {
+    throw new Error(`login: consoleUrl is not a valid F5 XC console URL: ${consoleUrl}`);
+  }
+
   const steps: string[] = [];
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  const isLoginUrl = (u: string) =>
-    /login[^.]*\.volterra\.us|\/auth\/realms\/|\/login-actions\//.test(u);
+  // A Keycloak login page is hosted on a *.volterra.us host AND has an
+  // auth/login-actions path. Hostname-anchored so credentials are only ever
+  // injected into the genuine Keycloak/console domains, never a foreign host
+  // that merely contains "/auth/realms/" in its path.
+  const KC_HOST = /(?:^|\.)volterra\.us$|(?:^|\.)console\.ves\.volterra\.io$/;
+  const isLoginUrl = (u: string) => {
+    try {
+      const { hostname, pathname } = new URL(u);
+      return (
+        KC_HOST.test(hostname) &&
+        /\/auth\/realms\/|\/login-actions\//.test(pathname)
+      );
+    } catch {
+      return false;
+    }
+  };
 
   // 1) Navigate to the console — 302s to Keycloak (or loads if already authed).
   const { tabId } = await navigate({ url: consoleUrl });
