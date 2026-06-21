@@ -405,26 +405,31 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   if (reuseId !== undefined) {
     targetTabId = reuseId;
     tabId = reuseId;
-    // Suppress the "Leave site?" beforeunload dialog that the XC Angular SPA
-    // registers via addEventListener (not window.onbeforeunload). Install a
-    // capture-phase interceptor that stops propagation before the app's handler
-    // can set e.returnValue, so Chrome never shows the dialog.
+    // The XC Angular SPA dynamically re-registers its beforeunload dirty-form
+    // guard. A one-shot interceptor gets overridden. Permanently suppress it by
+    // overriding the addEventListener so no handler can set returnValue on
+    // beforeunload. This runs in MAIN world (same context as the Angular app).
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        world: "MAIN", // MUST be MAIN — the XC app registers beforeunload in the page's JS context
+        world: "MAIN",
         func: () => {
+          // Already patched by a prior navigate — skip.
+          if ((window as any).__xcshBeforeunloadSuppressed) return;
+          (window as any).__xcshBeforeunloadSuppressed = true;
           window.onbeforeunload = null;
-          window.addEventListener(
-            "beforeunload",
-            (e: BeforeUnloadEvent) => {
-              e.stopImmediatePropagation();
-              e.preventDefault();
-              // @ts-ignore — clear returnValue so Chrome doesn't show the dialog
-              e.returnValue = "";
-            },
-            true, // capture phase — fires before the app's bubble-phase handler
-          );
+          // Override addEventListener to silently drop any beforeunload registrations.
+          const origAdd = EventTarget.prototype.addEventListener;
+          EventTarget.prototype.addEventListener = function (type: string, ...rest: any[]) {
+            if (type === "beforeunload") return; // silently drop
+            return origAdd.call(this, type, ...rest);
+          };
+          // Also override the onbeforeunload setter so direct assignment is a no-op.
+          Object.defineProperty(window, "onbeforeunload", {
+            set() { /* no-op */ },
+            get() { return null; },
+            configurable: true,
+          });
         },
       });
     } catch { /* page may not be scriptable (chrome:// etc) */ }
