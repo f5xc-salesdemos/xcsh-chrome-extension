@@ -843,7 +843,7 @@ async function screenshot(): Promise<{ data: string; format: string }> {
   const shot = chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", {
     format: "jpeg",
     quality: 50,
-    fromSurface: false,
+    captureBeyondViewport: false,
   }) as Promise<{ data: string }>;
   try {
     const result = (await Promise.race([
