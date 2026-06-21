@@ -416,12 +416,41 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   // Wait for navigation to complete on the new tab (race with a timeout).
   await waitForNavigation(tabId);
 
+  // F5 XC sometimes returns "Invalid CSRF token" on an OIDC re-auth — a reload
+  // restarts the flow with a fresh CSRF/state and recovers.
+  await recoverFromCsrf(tabId);
+
   // The XC console is a heavy Angular SPA — webNavigation.onCompleted fires on
   // the initial HTML, long before the app renders its content. Wait for the DOM
   // to settle so read_ax/find see the real content, not the loading shell.
   await waitForSettle(tabId);
 
   return { tabId };
+}
+
+/**
+ * Detect F5 XC's "Invalid CSRF token" OIDC error and recover by reloading the
+ * tab (which restarts the OIDC flow with a fresh CSRF/state).
+ */
+async function recoverFromCsrf(tabId: number): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let isCsrf = false;
+    try {
+      await ensureDebuggerAttached(tabId);
+      const r = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+        expression:
+          "/invalid csrf token|csrf token/i.test((document.body && document.body.innerText || '').slice(0, 500))",
+        returnByValue: true,
+      })) as { result?: { value?: boolean } };
+      isCsrf = r?.result?.value === true;
+    } catch {
+      return; // mid-navigation — let the caller's settle handle it
+    }
+    if (!isCsrf) return;
+    await chrome.tabs.reload(tabId);
+    await waitForNavigation(tabId);
+    await new Promise((r) => setTimeout(r, 1500));
+  }
 }
 
 /**
@@ -585,8 +614,9 @@ async function login(params: {
 
     if (isScopedUrl(url) && !isLoginUrl(url)) {
       steps.push(`302 → console (${new URL(url).hostname}) — authenticated`);
+      await recoverFromCsrf(tabId); // /web can land on an Invalid CSRF token page
       await waitForSettle(tabId); // let the console SPA render before returning
-      return { loggedIn: true, finalUrl: url, steps };
+      return { loggedIn: true, finalUrl: (await chrome.tabs.get(tabId)).url ?? url, steps };
     }
 
     // Still on a Keycloak page — check for an error or a required-action form.
