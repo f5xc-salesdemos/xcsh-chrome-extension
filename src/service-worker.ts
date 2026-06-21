@@ -412,11 +412,17 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
+        world: "MAIN", // MUST be MAIN — the XC app registers beforeunload in the page's JS context
         func: () => {
           window.onbeforeunload = null;
           window.addEventListener(
             "beforeunload",
-            (e) => { e.stopImmediatePropagation(); },
+            (e: BeforeUnloadEvent) => {
+              e.stopImmediatePropagation();
+              e.preventDefault();
+              // @ts-ignore — clear returnValue so Chrome doesn't show the dialog
+              e.returnValue = "";
+            },
             true, // capture phase — fires before the app's bubble-phase handler
           );
         },
