@@ -836,21 +836,29 @@ async function screenshot(): Promise<{ data: string; format: string }> {
   const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
   await chrome.debugger.sendCommand({ tabId }, "Page.enable", {});
-  // Page.captureScreenshot can hang on the heavy XC SPA — race it with an 8s
-  // timeout so it fails fast instead of blocking the bridge for the full
-  // request timeout.
+  // Page.captureScreenshot can hang on the heavy XC SPA. fromSurface:false
+  // captures from the renderer (avoids the GPU-surface hang); race an 8s
+  // timeout, and on timeout DETACH so the pending command doesn't wedge the
+  // debugger session for the next tool.
   const shot = chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", {
     format: "jpeg",
     quality: 50,
-    captureBeyondViewport: false,
+    fromSurface: false,
   }) as Promise<{ data: string }>;
-  const result = (await Promise.race([
-    shot,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("screenshot: Page.captureScreenshot timed out (XC SPA)")), 8000),
-    ),
-  ])) as { data: string };
-  return { data: result.data, format: "jpeg" };
+  try {
+    const result = (await Promise.race([
+      shot,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("screenshot: timed out (XC SPA)")), 8000),
+      ),
+    ])) as { data: string };
+    return { data: result.data, format: "jpeg" };
+  } catch (e) {
+    // Clear the (possibly wedged) debugger session so the next tool re-attaches clean.
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+    attachedTabs.delete(tabId);
+    throw e;
+  }
 }
 
 async function formInput(params: {
