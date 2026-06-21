@@ -855,9 +855,11 @@ async function screenshot(): Promise<{ data: string; format: string }> {
   // <all_urls> host permission but the tools still enforce isScopedUrl.
   const tab = await chrome.tabs.get(tabId);
   await chrome.tabs.update(tabId, { active: true });
+  // Quality 20 keeps the retina-resolution JPEG under the ~1 MB native-messaging
+  // message limit (a 2x retina Mac at q60 can exceed it → Chrome silently drops).
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: "jpeg",
-    quality: 60,
+    quality: 20,
   });
   const data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
   return { data, format: "jpeg" };
