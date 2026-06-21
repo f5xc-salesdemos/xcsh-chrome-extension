@@ -380,26 +380,38 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     throw new Error(`navigate: url blocked by managed policy: ${url}`);
   }
 
-  // Always create a fresh tab for reliability: after an extension reload, the
-  // prior tab's content scripts are gone and Chrome may not re-inject on a
-  // same-URL "navigation." A fresh tab guarantees a clean page load + content
-  // script injection. Close any stale console tabs from prior runs.
-  const stale = await chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS });
-  for (const t of stale) {
-    if (t.id !== undefined) {
-      try { await chrome.tabs.remove(t.id); } catch { /* tab may already be closed */ }
+  // REUSE one console tab — do NOT close/recreate. Repeatedly creating fresh
+  // tabs churns the OIDC session (causing "Invalid CSRF token") and forces a
+  // new chrome.debugger attach (the "started debugging" infobar) each time.
+  // Since reads go through CDP (not a content script), a stable single tab is
+  // both correct and far gentler on the auth flow.
+  let reuseId: number | undefined;
+  if (targetTabId !== undefined) {
+    try {
+      const t = await chrome.tabs.get(targetTabId);
+      if (t.id !== undefined) reuseId = t.id;
+    } catch {
+      /* prior tab was closed */
     }
   }
-  // Clear any debugger attachments to the old tabs.
-  attachedTabs.clear();
-
-  const created = await chrome.tabs.create({ url, active: true });
-  if (created.id === undefined) {
-    throw new Error("navigate: failed to create console tab");
+  if (reuseId === undefined) {
+    const existing = await chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS });
+    if (existing.length > 0 && existing[0].id !== undefined) reuseId = existing[0].id;
   }
-  targetTabId = created.id;
 
-  const tabId = targetTabId;
+  let tabId: number;
+  if (reuseId !== undefined) {
+    targetTabId = reuseId;
+    tabId = reuseId;
+    await chrome.tabs.update(tabId, { url, active: true });
+  } else {
+    const created = await chrome.tabs.create({ url, active: true });
+    if (created.id === undefined) {
+      throw new Error("navigate: failed to create console tab");
+    }
+    targetTabId = created.id;
+    tabId = created.id;
+  }
 
   // Wait for navigation to complete on the new tab (race with a timeout).
   await waitForNavigation(tabId);
