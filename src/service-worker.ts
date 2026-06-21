@@ -7,6 +7,14 @@
  */
 
 import {
+  clickRef,
+  formInputRef,
+  innerTextRef,
+  readAxTree,
+  scrollRef,
+  selectOptionRef,
+} from "./cdp-ax";
+import {
   matchNode,
   matchNodes,
   parseLocator,
@@ -630,23 +638,10 @@ function requireTab(): number {
 /** Run `__xcshReadAx()` in the target tab and return the AX tree. */
 async function readAxFromTab(): Promise<AxNode> {
   const tabId = requireTab();
-  // The content script installs __xcshReadAx in the ISOLATED world (same as
-  // executeScript's default). Retry briefly if the content script hasn't
-  // initialized yet (e.g., right after a navigation).
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const result = await chrome.scripting.executeScript({
-    target: { tabId },
-        func: () => (globalThis as any).__xcshReadAx?.() ?? null,
-      });
-      const tree = result[0]?.result;
-      if (tree && typeof tree === "object" && "role" in tree) return tree as AxNode;
-    } catch {
-      // executeScript can fail if the page is still loading / navigating.
-    }
-    await new Promise(r => setTimeout(r, 500));
-  }
-  throw new Error("read_ax: content script __xcshReadAx not available (page may still be loading)");
+  // Read the real CDP accessibility tree (parity with xcsh's catalogue, which
+  // was validated against Puppeteer accessibility.snapshot() = the same tree).
+  await ensureDebuggerAttached(tabId);
+  return (await readAxTree(tabId)) as unknown as AxNode;
 }
 
 async function readAx(): Promise<unknown> {
@@ -686,12 +681,12 @@ async function assertText(params: {
   const { selector, expected } = params;
   const tree = await readAxFromTab();
   const node = matchNode(tree, parseLocator(selector));
-  const [result] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (r: string) => (globalThis as any).__xcshGetInnerText(r),
-    args: [node.ref as string],
-  });
-  const text = (result?.result as string) ?? "";
+  // The matched AX node's accessible name often already contains the text;
+  // fall back to the element's innerText (via CDP) for a full check.
+  let text = (node.name as string) ?? "";
+  if (!text.includes(expected) && node.ref) {
+    text = await innerTextRef(tabId, node.ref as string);
+  }
   if (!text.includes(expected)) {
     throw new Error(
       `assert failed: "${expected}" not in "${text.slice(0, 200)}"`,
@@ -720,36 +715,10 @@ async function click(params: {
 }): Promise<{ clicked: string; x: number; y: number }> {
   const tabId = requireTab();
   const ref = params?.ref;
-
-  // Resolve the ref to viewport coords inside the page.
-  const resolved = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (r: string) => (globalThis as any).__xcshResolveRef(r),
-    args: [ref],
-  });
-  const coords = resolved[0]?.result as { x: number; y: number } | null;
-  if (!coords) {
-    throw new Error(`click: could not resolve ref: ${ref}`);
-  }
-  const { x, y } = coords;
-
+  if (!ref) throw new Error("click: ref is required");
   await ensureDebuggerAttached(tabId);
-
-  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x,
-    y,
-    button: "left",
-    clickCount: 1,
-  });
-  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x,
-    y,
-    button: "left",
-    clickCount: 1,
-  });
-
+  // Resolve the ref (CDP backendDOMNodeId) → coords → dispatch a real click.
+  const { x, y } = await clickRef(tabId, ref);
   return { clicked: ref, x, y };
 }
 
@@ -776,19 +745,11 @@ async function formInput(params: {
   const tabId = requireTab();
   const ref = params?.ref;
   const value = params?.value;
-
-  // Commit the value via the content-script helper (handles vsui-input quirks).
-  const result = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (r: string, v: string) =>
-      (globalThis as any).__xcshCommitInputValue(r, v),
-    args: [ref, value],
-  });
-  const r0 = result[0] as { error?: { message?: string } } | undefined;
-  if (r0?.error) {
-    throw new Error(r0.error.message ?? `form_input failed for ref: ${ref}`);
-  }
-
+  if (!ref) throw new Error("form_input: ref is required");
+  await ensureDebuggerAttached(tabId);
+  // Resolve the ref (CDP backendDOMNodeId) → object handle → commitInputValue
+  // (native value setter + input/change/blur/focusout — vsui-input parity).
+  await formInputRef(tabId, ref, value ?? "");
   return { filled: ref, value };
 }
 
@@ -861,13 +822,10 @@ async function selectOption(params: {
 }): Promise<{ selected: string; ref: string }> {
   const tabId = requireTab();
   const { ref, value } = params;
-  const [r] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (rr: string, vv: string) =>
-      (globalThis as any).__xcshSelectOption(rr, vv),
-    args: [ref, value],
-  });
-  if (!r?.result) {
+  if (!ref) throw new Error("select_option: ref is required");
+  await ensureDebuggerAttached(tabId);
+  const ok = await selectOptionRef(tabId, ref, value);
+  if (!ok) {
     throw new Error(`option "${value}" not found in select ${ref}`);
   }
   return { selected: value, ref };
@@ -876,11 +834,9 @@ async function selectOption(params: {
 async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> {
   const tabId = requireTab();
   const { ref } = params;
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (rr: string) => (globalThis as any).__xcshScrollTo(rr),
-    args: [ref],
-  });
+  if (!ref) throw new Error("scroll_to: ref is required");
+  await ensureDebuggerAttached(tabId);
+  await scrollRef(tabId, ref);
   return { scrolled: ref };
 }
 
