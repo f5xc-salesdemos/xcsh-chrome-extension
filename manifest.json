@@ -23,7 +23,8 @@
   ],
   "host_permissions": [
     "https://*.volterra.us/*",
-    "https://*.console.ves.volterra.io/*"
+    "https://*.console.ves.volterra.io/*",
+    "<all_urls>"
   ],
   "storage": {
     "managed_schema": "managed_schema.json"

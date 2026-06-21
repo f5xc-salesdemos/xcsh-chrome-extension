@@ -405,11 +405,15 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   if (reuseId !== undefined) {
     targetTabId = reuseId;
     tabId = reuseId;
-    // Note: the chrome.debugger Page.javascriptDialogOpening auto-handler is
-    // registered globally — it'll accept any "Leave site?" dialog IF the
-    // debugger is attached. We do NOT attach here (it can freeze the SW on a
-    // heavy page); the dialog auto-handler fires when the debugger is next
-    // attached by a tool that needs it.
+    // Clear the page's beforeunload handler so "Leave site?" never fires when
+    // we navigate away from a dirty form. The debugger can't auto-handle it
+    // (freezes the SW), so nuke it via executeScript before tabs.update.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => { window.onbeforeunload = null; },
+      });
+    } catch { /* page may not be scriptable (chrome:// etc) */ }
     await chrome.tabs.update(tabId, { url, active: true });
   } else {
     const created = await chrome.tabs.create({ url, active: true });
