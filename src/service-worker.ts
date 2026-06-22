@@ -283,6 +283,13 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
     case "ping":
       return { ok: true, version: VERSION };
 
+    case "reload": {
+      // Reload the extension programmatically (re-reads dist/ from disk).
+      // The SW restarts, native port reconnects via the 30s alarm.
+      chrome.runtime.reload();
+      return { reloading: true };
+    }
+
     case "debug_exec": {
       // Diagnostic: test if __xcshReadAx is available via the debugger path.
       const tabId = requireTab();
