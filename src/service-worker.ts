@@ -426,11 +426,15 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     // Use CDP Page.navigate (NOT chrome.tabs.update) — programmatic CDP
     // navigations bypass the native beforeunload prompt entirely, so the
     // "Leave site?" dialog never fires regardless of the form's dirty state.
+    // Neutralize beforeunload BEFORE navigating — covers both CDP and fallback paths.
+    await neutralizeBeforeunload(tabId);
     try {
       await ensureDebuggerAttached(tabId);
       await chrome.debugger.sendCommand({ tabId }, 'Page.navigate', { url });
     } catch {
       // Fallback: debugger may not attach on some pages (chrome://, etc.)
+      // neutralizeBeforeunload already ran, so the fallback tabs.update won't
+      // trigger "Leave site?" even though it's a plain navigation.
       await chrome.tabs.update(tabId, { url, active: true });
     }
   } else {
@@ -459,6 +463,7 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     const tab = await chrome.tabs.get(tabId);
     if (tab.url && isKeycloakLoginUrl(tab.url) && lastLoginCredentials) {
       await login(lastLoginCredentials);
+      await neutralizeBeforeunload(tabId);
       try {
         await ensureDebuggerAttached(tabId);
         await chrome.debugger.sendCommand({ tabId }, 'Page.navigate', { url });
@@ -493,6 +498,7 @@ async function recoverFromCsrf(tabId: number): Promise<void> {
       return; // mid-navigation — let the caller's settle handle it
     }
     if (!isCsrf) return;
+    await neutralizeBeforeunload(tabId);
     await chrome.tabs.reload(tabId);
     await waitForNavigation(tabId);
     await new Promise((r) => setTimeout(r, 1500));
@@ -765,6 +771,77 @@ async function evalInPage<T>(tabId: number, expression: string): Promise<T> {
     throw new Error(`evalInPage error: ${r.exceptionDetails.text ?? 'unknown'}`);
   }
   return r.result?.value as T;
+}
+
+/**
+ * Neutralize ALL beforeunload handlers on the current page so "Leave site?"
+ * never fires. Called before EVERY navigation (tabs.update, tabs.reload,
+ * Page.navigate) and before tabs.remove (close).
+ *
+ * Strategy: try the debugger (evalInPage, MAIN world) first — it's fast and
+ * works on the heavy XC SPA. If the debugger can't attach (chrome:// pages,
+ * login pages), fall back to chrome.scripting.executeScript with world:"MAIN"
+ * (works on light pages; hangs on the heavy XC SPA — but the fallback only
+ * fires when the debugger can't attach, which means a non-XC page).
+ *
+ * The neutralization removes the onbeforeunload property AND overrides
+ * addEventListener to drop future beforeunload registrations (the XC Angular
+ * SPA re-registers its dirty-form guard dynamically).
+ */
+async function neutralizeBeforeunload(tabId: number): Promise<void> {
+  const js = `
+    window.onbeforeunload = null;
+    if (!window.__xcshBuNeutralized) {
+      window.__xcshBuNeutralized = true;
+      const origAdd = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function(type, ...args) {
+        if (type === 'beforeunload') return;
+        return origAdd.call(this, type, ...args);
+      };
+      Object.defineProperty(window, 'onbeforeunload', {
+        set() {}, get() { return null; }, configurable: true
+      });
+    }
+    'neutralized'
+  `;
+  try {
+    // Prefer the debugger (MAIN world, fast, works on XC SPA).
+    await evalInPage<string>(tabId, js);
+  } catch {
+    // Fallback: executeScript (works on light pages where debugger can't attach).
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        // biome-ignore lint/suspicious/noExplicitAny: Chrome API
+        world: "MAIN" as any,
+        func: () => {
+          window.onbeforeunload = null;
+          // biome-ignore lint/suspicious/noExplicitAny: Chrome API
+          if (!(window as any).__xcshBuNeutralized) {
+            // biome-ignore lint/suspicious/noExplicitAny: Chrome API
+            (window as any).__xcshBuNeutralized = true;
+            const origAdd = EventTarget.prototype.addEventListener;
+            // biome-ignore lint/suspicious/noExplicitAny: Chrome API
+            EventTarget.prototype.addEventListener = function (type: string, ...args: any[]) {
+              if (type === "beforeunload") return;
+              return (origAdd as Function).apply(this, [type, ...args]);
+            };
+            Object.defineProperty(window, "onbeforeunload", {
+              set() {},
+              get() {
+                return null;
+              },
+              configurable: true,
+            });
+          }
+        },
+      });
+    } catch {
+      // Neither debugger nor executeScript worked — the page may not be scriptable
+      // (chrome://, about:blank). beforeunload may fire, but these pages rarely
+      // have dirty forms. Accept the risk.
+    }
+  }
 }
 
 /** Run `__xcshReadAx()` in the target tab and return the AX tree. */
@@ -1099,6 +1176,8 @@ async function tabsCreate(params: { url: string }): Promise<{ tabId: number | un
 
 async function tabsClose(params: { tabId: number }): Promise<{ closed: number }> {
   const { tabId } = params;
+  // Neutralize beforeunload so closing a dirty-form tab doesn't block.
+  await neutralizeBeforeunload(tabId);
   await chrome.tabs.remove(tabId);
   return { closed: tabId };
 }
