@@ -417,6 +417,15 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     try {
       const current = await chrome.tabs.get(tabId);
       if (current.url && current.url.split("?")[0] === url.split("?")[0]) {
+        // Tab already on the target — ensure the content script is injected
+        // (it may be missing if the extension was reloaded after the page loaded).
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId, allFrames: true },
+            files: ["accessibility-tree.js"],
+            world: "MAIN" as any,
+          });
+        } catch { /* may already be injected or page not scriptable */ }
         return { tabId };
       }
     } catch { /* tab may be closed — proceed to create */ }
@@ -451,6 +460,17 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   // the initial HTML, long before the app renders its content. Wait for the DOM
   // to settle so read_ax/find see the real content, not the loading shell.
   await waitForSettle(tabId);
+
+  // Ensure the content script is injected in the MAIN world after any navigation.
+  // (world:"MAIN" puts __xcshReadAx on the page's globalThis where Runtime.evaluate
+  // can see it — critical for the evalInPage-based tools.)
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ["accessibility-tree.js"],
+      world: "MAIN" as any,
+    });
+  } catch { /* already injected or page not scriptable */ }
 
   return { tabId };
 }
