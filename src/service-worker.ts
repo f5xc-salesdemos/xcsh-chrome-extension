@@ -283,6 +283,16 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
     case "ping":
       return { ok: true, version: VERSION };
 
+    case "debug_exec": {
+      // Diagnostic: trivial executeScript to test if chrome.scripting works at all.
+      const tabId = requireTab();
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => ({ ts: Date.now(), title: document.title, xcsh: typeof (globalThis as any).__xcshReadAx }),
+      });
+      return r?.result ?? null;
+    }
+
     case "navigate":
       return navigate(params);
 
