@@ -40,12 +40,18 @@ export default {
 		[
 			"@semantic-release/exec",
 			{
+				// Fail EARLY (before any version commit/tag) if CWS credentials are
+				// missing — prevents a half-done release (tag pushed, publish failed).
+				verifyConditionsCmd:
+					'test -n "$EXTENSION_ID" && test -n "$CLIENT_ID" && test -n "$CLIENT_SECRET" && test -n "$REFRESH_TOKEN" || (echo "Missing Chrome Web Store credentials (EXTENSION_ID/CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN)" && exit 1)',
 				// Write the version, build, and zip dist/ for upload.
 				prepareCmd:
 					"node scripts/set-version.mjs ${nextRelease.version} && bun install --frozen-lockfile && bun run build && (cd dist && zip -r ../xcsh-chrome-extension.zip . -x '*.DS_Store')",
-				// Upload + publish to the Chrome Web Store. Creds come from env (set in the workflow).
+				// Upload + publish to the Chrome Web Store. Upload must succeed; publish
+				// is best-effort (it can defer if the item is mid-review — the uploaded
+				// version still stages, and goes live when the current review clears).
 				publishCmd:
-					"npx --yes chrome-webstore-upload-cli@3 upload --source xcsh-chrome-extension.zip && npx --yes chrome-webstore-upload-cli@3 publish",
+					'npx --yes chrome-webstore-upload-cli@3 upload --source xcsh-chrome-extension.zip && (npx --yes chrome-webstore-upload-cli@3 publish || echo "::warning::CWS publish deferred (item may be in review) — v${nextRelease.version} is uploaded and will publish when the current review clears")',
 			},
 		],
 		[
