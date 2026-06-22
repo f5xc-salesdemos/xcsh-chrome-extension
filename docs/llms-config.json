@@ -1,3 +1,1 @@
-{
-  "customSets": []
-}
+{"customSets":[{"label":"Install","description":"Install the xcsh Chrome Extension","paths":["install"]}],"promote":["index","install"]}
