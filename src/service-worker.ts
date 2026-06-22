@@ -1058,7 +1058,7 @@ async function javascriptTool(params: { code: string }): Promise<{ result: unkno
     expression: code,
     returnByValue: true,
     awaitPromise: true,
-  // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
+    // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   })) as any;
   return { result: result?.result?.value };
 }
@@ -1196,7 +1196,7 @@ async function ensureDebuggerAttached(tabId: number): Promise<void> {
     if (tab.url && !isScopedUrl(tab.url)) {
       throw new Error(`tab ${tabId} is on ${tab.url} (not a console domain) — call navigate first`);
     }
-  // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
+    // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   } catch (e: any) {
     if (/not a console domain/i.test(e?.message ?? '')) throw e;
     // tabs.get can fail if the tab was closed — let attach try + fail naturally.
@@ -1204,7 +1204,7 @@ async function ensureDebuggerAttached(tabId: number): Promise<void> {
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
     attachedTabs.add(tabId);
-  // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
+    // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   } catch (e: any) {
     // Already attached is fine — record it and move on.
     if (/already attached/i.test(e?.message ?? String(e))) {
