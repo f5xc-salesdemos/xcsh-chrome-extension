@@ -819,7 +819,7 @@ async function neutralizeBeforeunload(tabId: number): Promise<void> {
       await chrome.scripting.executeScript({
         target: { tabId },
         // biome-ignore lint/suspicious/noExplicitAny: Chrome API
-        world: "MAIN" as any,
+        world: 'MAIN' as any,
         func: () => {
           window.onbeforeunload = null;
           // biome-ignore lint/suspicious/noExplicitAny: Chrome API
@@ -829,10 +829,10 @@ async function neutralizeBeforeunload(tabId: number): Promise<void> {
             const origAdd = EventTarget.prototype.addEventListener;
             // biome-ignore lint/suspicious/noExplicitAny: Chrome API
             EventTarget.prototype.addEventListener = function (type: string, ...args: any[]) {
-              if (type === "beforeunload") return;
-              return (origAdd as Function).apply(this, [type, ...args]);
+              if (type === 'beforeunload') return;
+              return (origAdd as (...a: unknown[]) => unknown).apply(this, [type, ...args]);
             };
-            Object.defineProperty(window, "onbeforeunload", {
+            Object.defineProperty(window, 'onbeforeunload', {
               set() {},
               get() {
                 return null;
