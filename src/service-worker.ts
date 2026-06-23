@@ -94,6 +94,11 @@ let targetTabId: number | undefined;
 // used by navigate() to transparently re-authenticate when the session expires.
 // In-memory only — never persisted.
 let lastLoginCredentials: { email: string; password: string; consoleUrl: string } | null = null;
+// True while login() is driving its initial navigate(). navigate()'s
+// session-expiry auto-recovery must skip re-invoking login() during this window,
+// else login()→navigate()→recovery→login()→… recurses infinitely, issuing a
+// fresh OIDC request (new state/nonce) every cycle and never settling.
+let loginInProgress = false;
 
 // Tabs we have attached the debugger to, so we can detach on cleanup and avoid
 // re-attaching needlessly.
@@ -461,7 +466,7 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   // Session-expiry auto-recovery
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (tab.url && isKeycloakLoginUrl(tab.url) && lastLoginCredentials) {
+    if (tab.url && isKeycloakLoginUrl(tab.url) && lastLoginCredentials && !loginInProgress) {
       await login(lastLoginCredentials);
       await neutralizeBeforeunload(tabId);
       try {
@@ -579,7 +584,15 @@ async function login(params: {
   const isLoginUrl = isKeycloakLoginUrl;
 
   // 1) Navigate to the console — 302s to Keycloak (or loads if already authed).
-  const { tabId } = await navigate({ url: consoleUrl });
+  //    Guard navigate()'s auto-recovery from re-entering login() (infinite
+  //    login→navigate→recovery→login recursion) while this initial navigate runs.
+  loginInProgress = true;
+  let tabId: number;
+  try {
+    ({ tabId } = await navigate({ url: consoleUrl }));
+  } finally {
+    loginInProgress = false;
+  }
   steps.push(`navigate → ${consoleUrl}`);
 
   // 2) Detect whether we're on the Keycloak login form or already on the console.
