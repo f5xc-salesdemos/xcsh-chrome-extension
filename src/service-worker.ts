@@ -156,24 +156,48 @@ chrome.debugger.onEvent.addListener((source, method, eventParams) => {
   }
 });
 
+// --- MV3 keepalive ---------------------------------------------------------
+//
+// The service worker suspends after ~30s idle. Once suspended, only the ~30s
+// reconnect alarm re-attaches it, so a fresh `xcsh` run that starts during a
+// suspend window races (and loses to) that alarm → intermittent "extension did
+// not connect" / hangs. Calling a chrome.* API on a sub-30s interval resets
+// Chrome's idle timer, so the SW never suspends and is always ready to reconnect
+// instantly. The call is cheap (one no-op API call every 20s) and self-sustaining
+// once started; if Chrome ever hard-kills the SW it restarts on the next event.
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+function startKeepAlive(): void {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => {
+    // Any extension API call resets the idle timer. getPlatformInfo is trivial.
+    chrome.runtime.getPlatformInfo(() => void chrome.runtime.lastError);
+  }, 20_000);
+}
+
 // Fast-reconnect: the ~30s alarm is too slow when a new bridge appears (e.g. a
-// fresh `xcsh` subprocess starts its bridge and probes for the extension for
-// only ~5s). On disconnect, retry connectNative on a short interval so the
-// extension re-attaches within the probe window — without this the runner falls
-// back to a separate CDP Chrome. The 30s alarm remains as a backstop.
+// fresh `xcsh` subprocess starts its bridge and probes for the extension). On
+// disconnect, retry connectNative on a short interval — and, because the SW is
+// kept alive above, keep retrying INDEFINITELY with a capped backoff so the
+// extension re-attaches whenever a bridge next appears (not just within the
+// first 30s). Idle steady-state polls every ~8s (the native host exits instantly
+// when no bridge is listening, so each poll is cheap). The 30s alarm stays as a
+// backstop for the case where the SW was hard-killed and restarted.
+const RECONNECT_BACKOFF_MS = [500, 1000, 1500, 2000, 3000, 5000, 8000];
 let fastReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleFastReconnect(): void {
   if (port || fastReconnectTimer) return;
-  let attempts = 0;
+  let attempt = 0;
   const tick = () => {
     fastReconnectTimer = null;
     if (port) return;
     connect();
-    if (!port && attempts++ < 20) {
-      fastReconnectTimer = setTimeout(tick, 1500); // ~30s of fast retries, then the alarm takes over
+    if (!port) {
+      const delay = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)]!;
+      attempt++;
+      fastReconnectTimer = setTimeout(tick, delay);
     }
   };
-  fastReconnectTimer = setTimeout(tick, 500);
+  fastReconnectTimer = setTimeout(tick, RECONNECT_BACKOFF_MS[0]);
 }
 
 function connect(): void {
@@ -219,8 +243,12 @@ function onMessage(msg: any): void {
   }
 }
 
-// Connect on SW startup.
+// Keep the SW alive (so reconnection is always fast) and connect on startup.
+startKeepAlive();
 connect();
+// If the initial connect found no bridge, start polling immediately rather than
+// waiting for the first disconnect or the 30s alarm.
+if (!port) scheduleFastReconnect();
 
 // Read the managed enterprise policy on startup.
 refreshManagedPolicy();
@@ -369,6 +397,12 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
 
     case 'click':
       return click(params);
+
+    case 'click_xy':
+      return clickXy(params);
+
+    case 'type_text':
+      return typeText(params);
 
     case 'screenshot':
       return screenshot();
@@ -984,17 +1018,17 @@ async function find(params: {
   };
 }
 
-async function click(params: { ref: string }): Promise<{ clicked: string; x: number; y: number }> {
-  const tabId = requireTab();
-  const ref = params?.ref;
-  if (!ref) throw new Error('click: ref is required');
-  // Resolve the ref → viewport coords via the debugger (executeScript hangs on XC SPA).
-  const coords = await evalInPage<{ x: number; y: number } | null>(
-    tabId,
-    `typeof __xcshResolveRef === 'function' ? __xcshResolveRef(${JSON.stringify(ref)}) : null`,
-  );
-  if (!coords) throw new Error(`click: could not resolve ref: ${ref}`);
-  const { x, y } = coords;
+/** Dispatch a trusted left click at viewport coords via the debugger. Trusted
+ * (not synthetic) events are required for Angular-zone handlers (e.g. vsui
+ * dropdowns / form submit buttons) to fire and run change detection. */
+async function dispatchClickAt(tabId: number, x: number, y: number): Promise<void> {
+  // Move the pointer over the target first — some controls (Angular Material /
+  // vsui buttons) only react once they see a hover/pointer-position update.
+  await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x,
+    y,
+  });
   await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
     type: 'mousePressed',
     x,
@@ -1009,7 +1043,46 @@ async function click(params: { ref: string }): Promise<{ clicked: string; x: num
     button: 'left',
     clickCount: 1,
   });
+}
+
+async function click(params: { ref: string }): Promise<{ clicked: string; x: number; y: number }> {
+  const tabId = requireTab();
+  const ref = params?.ref;
+  if (!ref) throw new Error('click: ref is required');
+  // Resolve the ref → viewport coords via the debugger (executeScript hangs on XC SPA).
+  const coords = await evalInPage<{ x: number; y: number } | null>(
+    tabId,
+    `typeof __xcshResolveRef === 'function' ? __xcshResolveRef(${JSON.stringify(ref)}) : null`,
+  );
+  if (!coords) throw new Error(`click: could not resolve ref: ${ref}`);
+  const { x, y } = coords;
+  await dispatchClickAt(tabId, x, y);
   return { clicked: ref, x, y };
+}
+
+/** Trusted click at explicit viewport coordinates. Lets callers act on elements
+ * located via `javascript_tool` (getBoundingClientRect) WITHOUT a `read_ax` ref
+ * — essential on heavy pages (e.g. the create form) where read_ax cannot run. */
+async function clickXy(params: { x: number; y: number }): Promise<{ clicked: string; x: number; y: number }> {
+  const tabId = requireTab();
+  const x = Number(params?.x);
+  const y = Number(params?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('click_xy: numeric x and y are required');
+  await dispatchClickAt(tabId, x, y);
+  return { clicked: `${x},${y}`, x, y };
+}
+
+/** Type text into the focused element via CDP Input.insertText. Unlike setting
+ * `.value`, this fires genuine trusted `input` events, so Angular's
+ * ControlValueAccessor commits the value to the reactive form model — the
+ * authentic "human typing" path, robust to vsui value-descriptor patching. */
+async function typeText(params: { text: string }): Promise<{ typed: string }> {
+  const tabId = requireTab();
+  const text = params?.text;
+  if (typeof text !== 'string') throw new Error('type_text: text is required');
+  await ensureDebuggerAttached(tabId);
+  await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text });
+  return { typed: text };
 }
 
 async function screenshot(): Promise<{ data: string; format: string }> {
