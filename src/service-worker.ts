@@ -156,19 +156,40 @@ chrome.debugger.onEvent.addListener((source, method, eventParams) => {
   }
 });
 
+// Fast-reconnect: the ~30s alarm is too slow when a new bridge appears (e.g. a
+// fresh `xcsh` subprocess starts its bridge and probes for the extension for
+// only ~5s). On disconnect, retry connectNative on a short interval so the
+// extension re-attaches within the probe window — without this the runner falls
+// back to a separate CDP Chrome. The 30s alarm remains as a backstop.
+let fastReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleFastReconnect(): void {
+  if (port || fastReconnectTimer) return;
+  let attempts = 0;
+  const tick = () => {
+    fastReconnectTimer = null;
+    if (port) return;
+    connect();
+    if (!port && attempts++ < 20) {
+      fastReconnectTimer = setTimeout(tick, 1500); // ~30s of fast retries, then the alarm takes over
+    }
+  };
+  fastReconnectTimer = setTimeout(tick, 500);
+}
+
 function connect(): void {
   if (port) return;
   try {
     port = chrome.runtime.connectNative(NATIVE_HOST);
     port.onMessage.addListener(onMessage);
     port.onDisconnect.addListener(() => {
-      // The reconnect alarm will bring us back up.
       port = null;
+      // Re-attach quickly so a newly-started bridge's short probe finds us.
+      scheduleFastReconnect();
     });
   } catch {
     // Native host not available yet (e.g. xcsh not running at startup).
-    // Silently retry on the next reconnect alarm — no extension error badge.
     port = null;
+    scheduleFastReconnect();
   }
 }
 
