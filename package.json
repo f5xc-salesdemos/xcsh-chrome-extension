@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "bun build.ts",
+    "build:dev": "bun build.ts && node scripts/inject-key.mjs",
     "test": "bun test",
     "check:types": "tsc --noEmit"
   },
