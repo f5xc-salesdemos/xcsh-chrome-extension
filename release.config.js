@@ -5,10 +5,14 @@
  * push to main, semantic-release:
  *   1. determines the next version from commit messages
  *   2. writes that version into manifest.json + package.json (set-version.mjs)
- *   3. builds dist/ and zips it
- *   4. uploads + publishes the zip to the Chrome Web Store (chrome-webstore-upload-cli)
- *   5. creates a GitHub release with the zip attached
- *   6. commits the version bump back to main
+ *   3. builds dist/ and zips it (one store package — no `key`)
+ *   4. uploads + publishes that zip to the Chrome Web Store (scripts/publish-cws.mjs)
+ *   5. creates a GitHub release (tag + notes) with the store zip attached
+ *
+ * The Chrome Web Store is the single distribution channel — there is no unpacked
+ * GitHub-release artifact. No version-bump commit lands on main (no
+ * @semantic-release/git): the released version lives in the git tag + GitHub
+ * release + the published CWS package, stamped at build time by set-version.mjs.
  *
  * Required GitHub secrets:
  *   RELEASE_TOKEN          — GitHub PAT (org-level)
@@ -44,28 +48,25 @@ export default {
         // missing — prevents a half-done release (tag pushed, publish failed).
         verifyConditionsCmd:
           'test -n "$EXTENSION_ID" && test -n "$CLIENT_ID" && test -n "$CLIENT_SECRET" && test -n "$REFRESH_TOKEN" || (echo "Missing Chrome Web Store credentials (EXTENSION_ID/CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN)" && exit 1)',
-        // Build TWO artifacts:
-        //  1. xcsh-chrome-extension.zip          — no `key` (Chrome Web Store)
-        //  2. xcsh-chrome-extension-unpacked.zip — with `key` (stable ID for
-        //     unpacked install from the GitHub release — native messaging works)
+        // Build ONE artifact: xcsh-chrome-extension.zip — the store package, with
+        // NO `key` (CWS assigns the ID from its own keypair and rejects a `key`).
+        // Local-dev keying lives in `bun run build:dev`, never in the release.
         prepareCmd:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
-          "node scripts/set-version.mjs ${nextRelease.version} && bun install --frozen-lockfile && bun run build && (cd dist && zip -r ../xcsh-chrome-extension.zip . -x '*.DS_Store') && node scripts/inject-key.mjs && (cd dist && zip -r ../xcsh-chrome-extension-unpacked.zip . -x '*.DS_Store')",
-        // Upload + publish to the Chrome Web Store — fully BEST-EFFORT. While the
-        // item is in review the upload fails (ITEM_NOT_UPDATABLE); that must NOT
-        // abort the release, because the GitHub release (with the unpacked zip) is
-        // the interim distribution. Once review clears, future releases publish.
+          "node scripts/set-version.mjs ${nextRelease.version} && bun install --frozen-lockfile && bun run build && (cd dist && zip -r ../xcsh-chrome-extension.zip . -x '*.DS_Store')",
+        // Upload + publish to the Chrome Web Store. publish-cws.mjs fails the
+        // release on real errors (bad credentials, wrong EXTENSION_ID, network)
+        // and tolerates only the transient case — a previous submission still in
+        // review (ITEM_NOT_UPDATABLE) — which publishes once review clears.
         publishCmd:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
-          '(npx --yes chrome-webstore-upload-cli@3 upload --source xcsh-chrome-extension.zip && npx --yes chrome-webstore-upload-cli@3 publish) || echo "::warning::Chrome Web Store deferred (item in review) — install v${nextRelease.version} from the GitHub release (unpacked) until the listing is approved"',
+          'node scripts/publish-cws.mjs ${nextRelease.version}',
       },
     ],
     [
       '@semantic-release/github',
       {
         assets: [
-          // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
-          { path: 'xcsh-chrome-extension-unpacked.zip', label: 'Install (unpacked) — v${nextRelease.version}' },
           // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
           { path: 'xcsh-chrome-extension.zip', label: 'Chrome Web Store package — v${nextRelease.version}' },
         ],

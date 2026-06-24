@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Install the xcsh Chrome Extension from a GitHub release (unpacked) while the Chrome Web Store listing is in review.
+description: Install the xcsh Chrome Extension from the Chrome Web Store and connect the native-messaging bridge.
 sidebar:
   order: 1
   label: Install
@@ -8,32 +8,26 @@ sidebar:
 
 import { Steps } from '@astrojs/starlight/components';
 
-The Chrome Web Store listing is currently **in review**. Until it is approved, install the extension **unpacked** from the latest GitHub release. This is a one-time setup for developers and sales engineers.
+Install the **xcsh Chrome Extension** from the Chrome Web Store, then connect the native-messaging bridge to the xcsh CLI. This is a one-time setup for developers and sales engineers.
 
 ## Prerequisites
 
 - [Google Chrome](https://www.google.com/chrome/) (or a Chromium-based browser)
 - The [xcsh CLI](https://f5xc-salesdemos.github.io/xcsh/) installed
 
-## Install the extension (unpacked)
+## Install the extension
 
 <Steps>
 
-1. **Download the latest release.** Go to the [Releases page](https://github.com/f5xc-salesdemos/xcsh-chrome-extension/releases/latest) and download **`xcsh-chrome-extension-unpacked.zip`** (the "Install (unpacked)" asset).
+1. **Open the Chrome Web Store listing.** Go to the [xcsh extension page](https://chromewebstore.google.com/detail/klajkjdoehjidngligegnpknogmjjhkc).
 
-2. **Unzip it** to a stable location you won't delete — for example `~/xcsh-chrome-extension/`.
+2. **Add it to Chrome.** Click **Add to Chrome**, then confirm **Add extension**.
 
-3. **Open the extensions page.** Navigate to `chrome://extensions` in Chrome.
-
-4. **Enable Developer mode** using the toggle in the top-right corner.
-
-5. **Load the extension.** Click **Load unpacked** and select the unzipped folder.
-
-6. **Verify the extension ID.** The loaded extension must show the ID:
+3. **Verify the extension ID.** Open `chrome://extensions`, enable **Developer mode** (top-right toggle), and confirm the xcsh card shows the ID:
    ```
-   khlalklompggpfnmeclpligmcbknkemg
+   klajkjdoehjidngligegnpknogmjjhkc
    ```
-   This fixed ID is what the native-messaging bridge expects. (The `unpacked` build pins it via a manifest `key` — that is why you download the `-unpacked.zip`, not the plain `.zip`.)
+   This is the fixed ID the native-messaging bridge expects.
 
 </Steps>
 
@@ -54,8 +48,26 @@ The Chrome Web Store listing is currently **in review**. Until it is approved, i
 
 ## Updating
 
-When a new release is published, download the new `xcsh-chrome-extension-unpacked.zip`, replace your unzipped folder's contents, and click the **reload** (↻) icon on the extension card in `chrome://extensions`.
+Chrome updates the extension automatically from the Web Store. To force an update now, open `chrome://extensions`, enable **Developer mode**, and click **Update**.
 
-## Switching to the Chrome Web Store
+## Develop locally (unpacked)
 
-Once the Chrome Web Store listing is approved, you can install from the store instead — remove the unpacked version first, then install from the store and re-run `xcsh chrome setup`.
+Working on the extension itself? Build a keyed unpacked copy that loads under the **same** canonical ID as the store build, so the native bridge works while you iterate.
+
+<Steps>
+
+1. **Build a dev copy:**
+   ```bash
+   bun run build:dev
+   ```
+   This builds `dist/` and injects the store's public `key`, pinning the unpacked ID to `klajkjdoehjidngligegnpknogmjjhkc` (the same ID store users get).
+
+2. **Load it.** At `chrome://extensions` (Developer mode on), click **Load unpacked** and select the `dist/` folder. Confirm the ID matches the canonical ID above.
+
+3. **Register the bridge** with `xcsh chrome setup`, then reload a console tab.
+
+</Steps>
+
+:::note
+Remove the Chrome Web Store copy first if it is installed — Chrome will not load two extensions that share the same ID.
+:::
