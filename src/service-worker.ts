@@ -1238,13 +1238,41 @@ async function javascriptTool(params: { code: string }): Promise<{ result: unkno
     throw new Error(`javascript_tool: tab is not on a scoped console domain: ${tab.url}`);
   }
   await ensureDebuggerAttached(tabId);
-  const result = (await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-    expression: code,
-    returnByValue: true,
-    awaitPromise: true,
-    // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
-  })) as any;
-  return { result: result?.result?.value };
+  const result = await evaluateWithRecovery(tabId, code);
+  // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
+  return { result: (result as any)?.result?.value };
+}
+
+/**
+ * Runtime.evaluate with stale-context self-healing. After the OIDC login flow's
+ * cross-origin redirects (or a Page.navigate), the debugger's default execution
+ * context can go stale, and Runtime.evaluate then HANGS indefinitely (no timeout
+ * on chrome.debugger.sendCommand) — which wedges every subsequent tool call. So
+ * bound each evaluate; on timeout, detach + reattach the debugger (resetting to a
+ * fresh context) and retry once.
+ */
+async function evaluateWithRecovery(tabId: number, code: string, timeoutMs = 8_000): Promise<unknown> {
+  const evalOnce = () =>
+    chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: code,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+  const withTimeout = (p: Promise<unknown>) =>
+    Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('Runtime.evaluate timed out')), timeoutMs))]);
+  try {
+    return await withTimeout(evalOnce());
+  } catch {
+    // Reset the debugger session to clear a stale/frozen execution context.
+    try {
+      await chrome.debugger.detach({ tabId });
+    } catch {
+      /* already detached */
+    }
+    attachedTabs.delete(tabId);
+    await ensureDebuggerAttached(tabId);
+    return await withTimeout(evalOnce());
+  }
 }
 
 // --- Tab / window management -----------------------------------------------
