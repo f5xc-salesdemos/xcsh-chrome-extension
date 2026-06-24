@@ -5,19 +5,16 @@
  * stop button while the agent is driving the console tab. Toggled by
  * `indicator_show` / `indicator_hide` runtime messages from the service worker.
  *
- * Visibility uses a three-phase opacity envelope:
- *   1. ATTACK  — a fast snap to full brightness when activity begins.
- *   2. HOLD    — a minimum dwell at full brightness after the most recent
- *                trigger; a hide that arrives inside this window is deferred so
- *                a brief blip stays lit instead of fading the instant it ends.
- *   3. RELEASE — a gentle, capacitor-style discharge once the hold has elapsed.
- *
- * The service worker fires show/hide around every tool call, so the hold plus
- * the slow release bridge the brief gaps between consecutive calls: a burst of
- * activity reads as one steady, breathing glow instead of strobing on and off.
- * The elements are created once and kept (toggled via opacity), then cleaned up
- * only after a full release has elapsed.
+ * The timing — a fast attack, a minimum hold at full brightness, then a gentle
+ * capacitor-style release — lives in the pure, unit-tested `indicator-envelope`
+ * state machine. This file is the DOM/Chrome adapter: it supplies the visual
+ * effects (opacity transitions, element teardown) and the real clock + timers,
+ * and wires runtime messages to the envelope. The service worker fires show/hide
+ * around every tool call, so the hold plus the slow release bridge the brief
+ * gaps between consecutive calls: a burst reads as one steady, breathing glow.
  */
+
+import { createEnvelope, type EnvelopeEffects } from './indicator-envelope';
 
 const GLOW_ID = '__xcsh-agent-glow';
 const BADGE_ID = '__xcsh-agent-badge';
@@ -29,9 +26,6 @@ const CLEANUP_MS = 1500; // remove from DOM once the release has fully faded
 
 let glow: HTMLDivElement | undefined;
 let badge: HTMLDivElement | undefined;
-let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
-let holdTimer: ReturnType<typeof setTimeout> | undefined;
-let peakAt = 0; // timestamp (performance.now) of the most recent snap to full brightness
 
 function createElements(): void {
   glow = document.createElement('div');
@@ -56,71 +50,42 @@ function createElements(): void {
   document.documentElement.appendChild(badge);
 }
 
-function showIndicator(): void {
-  // A pending hold or cleanup means we're already lit (or mid-release); cancel
-  // both and snap back to full — a fresh trigger restarts the hold window.
-  if (holdTimer !== undefined) {
-    clearTimeout(holdTimer);
-    holdTimer = undefined;
-  }
-  if (cleanupTimer !== undefined) {
-    clearTimeout(cleanupTimer);
-    cleanupTimer = undefined;
-  }
-
-  const firstAppearance = glow === undefined;
-  if (firstAppearance) createElements();
-  if (!glow || !badge) return;
-
-  // Force a reflow on first appearance so the opacity:0 → 1 transition animates
-  // from the initial state instead of snapping straight to full brightness.
-  if (firstAppearance) void glow.offsetHeight;
-
-  glow.style.transition = ATTACK;
-  glow.style.opacity = '1';
-  badge.style.transition = ATTACK;
-  badge.style.opacity = '1';
-  badge.style.pointerEvents = 'auto';
-  peakAt = performance.now();
-}
-
-function hideIndicator(): void {
-  if (!glow || !badge) return;
-  if (holdTimer !== undefined) return; // discharge already queued; nothing to do
-
-  // Enforce the minimum hold: if the trigger was less than HOLD_MS ago, defer
-  // the discharge until the rest of the window has elapsed.
-  const remaining = HOLD_MS - (performance.now() - peakAt);
-  if (remaining > 0) {
-    holdTimer = setTimeout(() => {
-      holdTimer = undefined;
-      beginRelease();
-    }, remaining);
-    return;
-  }
-  beginRelease();
-}
-
-function beginRelease(): void {
-  if (!glow || !badge) return;
-
-  glow.style.transition = RELEASE;
-  glow.style.opacity = '0';
-  badge.style.transition = RELEASE;
-  badge.style.opacity = '0';
-  badge.style.pointerEvents = 'none'; // invisible badge must not eat clicks
-
-  if (cleanupTimer !== undefined) clearTimeout(cleanupTimer);
-  cleanupTimer = setTimeout(() => {
+const effects: EnvelopeEffects = {
+  onAttack(): void {
+    const firstAppearance = glow === undefined;
+    if (firstAppearance) createElements();
+    if (!glow || !badge) return;
+    // Force a reflow on first appearance so the opacity:0 → 1 transition animates
+    // from the initial state instead of snapping straight to full brightness.
+    if (firstAppearance) void glow.offsetHeight;
+    glow.style.transition = ATTACK;
+    glow.style.opacity = '1';
+    badge.style.transition = ATTACK;
+    badge.style.opacity = '1';
+    badge.style.pointerEvents = 'auto';
+  },
+  onRelease(): void {
+    if (!glow || !badge) return;
+    glow.style.transition = RELEASE;
+    glow.style.opacity = '0';
+    badge.style.transition = RELEASE;
+    badge.style.opacity = '0';
+    badge.style.pointerEvents = 'none'; // invisible badge must not eat clicks
+  },
+  onCleanup(): void {
     glow?.remove();
     badge?.remove();
     glow = undefined;
     badge = undefined;
-    cleanupTimer = undefined;
-  }, CLEANUP_MS);
-}
+  },
+  now: () => performance.now(),
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (id) => clearTimeout(id),
+};
+
+const envelope = createEnvelope(effects, { holdMs: HOLD_MS, cleanupMs: CLEANUP_MS });
 
 chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
-  if (msg?.type === 'indicator_show') showIndicator();
-  if (msg?.type === 'indicator_hide') hideIndicator();
+  if (msg?.type === 'indicator_show') envelope.show();
+  if (msg?.type === 'indicator_hide') envelope.hide();
 });
