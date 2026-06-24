@@ -5,24 +5,33 @@
  * stop button while the agent is driving the console tab. Toggled by
  * `indicator_show` / `indicator_hide` runtime messages from the service worker.
  *
- * Visibility uses an asymmetric opacity envelope — a fast attack on show and a
- * gentle, capacitor-style release on hide. The service worker fires show/hide
- * around every tool call, so the slow release bridges the brief gaps between
- * consecutive calls: a burst of activity reads as one steady glow instead of
- * strobing on and off. The elements are created once and kept (toggled via
- * opacity), then cleaned up only after a full release has elapsed.
+ * Visibility uses a three-phase opacity envelope:
+ *   1. ATTACK  — a fast snap to full brightness when activity begins.
+ *   2. HOLD    — a minimum dwell at full brightness after the most recent
+ *                trigger; a hide that arrives inside this window is deferred so
+ *                a brief blip stays lit instead of fading the instant it ends.
+ *   3. RELEASE — a gentle, capacitor-style discharge once the hold has elapsed.
+ *
+ * The service worker fires show/hide around every tool call, so the hold plus
+ * the slow release bridge the brief gaps between consecutive calls: a burst of
+ * activity reads as one steady, breathing glow instead of strobing on and off.
+ * The elements are created once and kept (toggled via opacity), then cleaned up
+ * only after a full release has elapsed.
  */
 
 const GLOW_ID = '__xcsh-agent-glow';
 const BADGE_ID = '__xcsh-agent-badge';
 
 const ATTACK = 'opacity 120ms ease-out'; // quick snap to bright when activity begins
-const RELEASE = 'opacity 1400ms ease-out'; // gentle discharge after activity ends
+const HOLD_MS = 800; // minimum dwell at full brightness after a trigger before discharge
+const RELEASE = 'opacity 1400ms ease-out'; // gentle discharge after the hold elapses
 const CLEANUP_MS = 1500; // remove from DOM once the release has fully faded
 
 let glow: HTMLDivElement | undefined;
 let badge: HTMLDivElement | undefined;
 let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+let holdTimer: ReturnType<typeof setTimeout> | undefined;
+let peakAt = 0; // timestamp (performance.now) of the most recent snap to full brightness
 
 function createElements(): void {
   glow = document.createElement('div');
@@ -48,7 +57,12 @@ function createElements(): void {
 }
 
 function showIndicator(): void {
-  // A pending cleanup means we're mid-release; cancel it and snap back to bright.
+  // A pending hold or cleanup means we're already lit (or mid-release); cancel
+  // both and snap back to full — a fresh trigger restarts the hold window.
+  if (holdTimer !== undefined) {
+    clearTimeout(holdTimer);
+    holdTimer = undefined;
+  }
   if (cleanupTimer !== undefined) {
     clearTimeout(cleanupTimer);
     cleanupTimer = undefined;
@@ -67,9 +81,27 @@ function showIndicator(): void {
   badge.style.transition = ATTACK;
   badge.style.opacity = '1';
   badge.style.pointerEvents = 'auto';
+  peakAt = performance.now();
 }
 
 function hideIndicator(): void {
+  if (!glow || !badge) return;
+  if (holdTimer !== undefined) return; // discharge already queued; nothing to do
+
+  // Enforce the minimum hold: if the trigger was less than HOLD_MS ago, defer
+  // the discharge until the rest of the window has elapsed.
+  const remaining = HOLD_MS - (performance.now() - peakAt);
+  if (remaining > 0) {
+    holdTimer = setTimeout(() => {
+      holdTimer = undefined;
+      beginRelease();
+    }, remaining);
+    return;
+  }
+  beginRelease();
+}
+
+function beginRelease(): void {
   if (!glow || !badge) return;
 
   glow.style.transition = RELEASE;
