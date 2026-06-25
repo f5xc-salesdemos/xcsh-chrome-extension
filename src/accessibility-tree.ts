@@ -16,6 +16,11 @@ const REFMAP = new Map<string, WeakRef<Element>>();
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 };
 
+// Return the live Element for a ref (not coords) so the deterministic click path
+// can take an object handle and derive geometry from the renderer (getContentQuads).
+// biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
+(globalThis as any).__xcshResolveRefEl = (ref: string): Element | null => REFMAP.get(ref)?.deref() ?? null;
+
 /** Port of xcsh input-commit.ts commitInputValue — bypasses framework-patched value descriptors. */
 // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
 export function commitInputValue(el: any, value: string): void {

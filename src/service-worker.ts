@@ -398,6 +398,9 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
     case 'click':
       return click(params);
 
+    case 'click_element':
+      return clickElement(params);
+
     case 'click_xy':
       return clickXy(params);
 
@@ -845,6 +848,122 @@ async function evalInPage<T>(tabId: number, expression: string): Promise<T> {
 }
 
 /**
+ * Evaluate an expression and return a live OBJECT HANDLE (objectId) to its result
+ * instead of a serialized value — the element-handle counterpart to {@link evalInPage}.
+ * Returns undefined when the expression yields null/undefined (no element).
+ * The caller MUST release the handle (Runtime.releaseObject) — clickElementByObjectId does.
+ */
+async function evalForObject(tabId: number, expression: string): Promise<string | undefined> {
+  await ensureDebuggerAttached(tabId);
+  const r = (await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+    expression,
+    returnByValue: false,
+    awaitPromise: false,
+  })) as { result?: { objectId?: string; subtype?: string }; exceptionDetails?: { text?: string } };
+  if (r.exceptionDetails) {
+    throw new Error(`evalForObject error: ${r.exceptionDetails.text ?? 'unknown'}`);
+  }
+  // subtype 'null' or no objectId → the expression returned null/undefined.
+  if (!r.result?.objectId || r.result.subtype === 'null') return undefined;
+  return r.result.objectId;
+}
+
+/**
+ * THE deterministic click primitive. Given a live element handle (objectId), it
+ * derives the clickable point from the RENDERER's layout (DOM.getContentQuads —
+ * CSS viewport px, transforms/zoom/DPR already baked in, the exact space
+ * Input.dispatchMouseEvent consumes) rather than JS getBoundingClientRect, then
+ * VERIFIES the point lands on the target via document.elementFromPoint before
+ * dispatching. The handle is held across scroll→measure→verify→click so coords
+ * can't go stale. On occlusion it re-scrolls once, then fails loudly naming the
+ * occluder — never a silent mis-click. Releases the handle in finally.
+ */
+async function clickElementByObjectId(
+  tabId: number,
+  objectId: string,
+  label = 'element',
+): Promise<{ x: number; y: number; hit: boolean }> {
+  const T = { tabId };
+  try {
+    // Center of the largest visible content quad; fall back to the box model.
+    const measure = async (): Promise<{ x: number; y: number }> => {
+      try {
+        await chrome.debugger.sendCommand(T, 'DOM.scrollIntoViewIfNeeded', { objectId });
+      } catch {
+        /* some nodes can't scroll; geometry may still be valid */
+      }
+      const quadsRes = (await chrome.debugger
+        .sendCommand(T, 'DOM.getContentQuads', { objectId })
+        .catch(() => ({ quads: [] }))) as { quads: number[][] };
+      let best: number[] | undefined;
+      let bestArea = 0;
+      for (const q of quadsRes.quads ?? []) {
+        // Shoelace area of the 4-point quad [x1,y1,x2,y2,x3,y3,x4,y4].
+        const a = Math.abs(
+          (q[0] * q[3] - q[2] * q[1]) +
+            (q[2] * q[5] - q[4] * q[3]) +
+            (q[4] * q[7] - q[6] * q[5]) +
+            (q[6] * q[1] - q[0] * q[7]),
+        ) / 2;
+        if (a > bestArea) {
+          bestArea = a;
+          best = q;
+        }
+      }
+      if (best && bestArea > 1) {
+        return { x: (best[0] + best[4]) / 2, y: (best[1] + best[5]) / 2 };
+      }
+      // Fallback: box model content quad (handles zero-area-quad-but-clickable cases).
+      const bm = (await chrome.debugger.sendCommand(T, 'DOM.getBoxModel', { objectId })) as {
+        model: { content: number[] };
+      };
+      const c = bm.model.content;
+      return { x: (c[0] + c[4]) / 2, y: (c[1] + c[5]) / 2 };
+    };
+
+    // Hit-test: does the point resolve to the target (self / ancestor / descendant)?
+    const hitTest = async (x: number, y: number): Promise<string> => {
+      const res = (await chrome.debugger.sendCommand(T, 'Runtime.callFunctionOn', {
+        objectId,
+        returnByValue: true,
+        functionDeclaration: `function(cx, cy){
+          var h = document.elementFromPoint(cx, cy);
+          if (!h) return 'none';
+          if (h === this || this.contains(h) || h.contains(this)) return 'hit';
+          return 'occluded:' + (h.tagName||'') + '.' + ((h.className||'')+'').slice(0,40);
+        }`,
+        arguments: [{ value: x }, { value: y }],
+      })) as { result?: { value?: string } };
+      return res.result?.value ?? 'none';
+    };
+
+    let { x, y } = await measure();
+    let verdict = await hitTest(x, y);
+    if (verdict !== 'hit') {
+      // Scroll-retry once: the target may have been mid-animation or just-scrolled.
+      try {
+        await chrome.debugger.sendCommand(T, 'DOM.scrollIntoViewIfNeeded', { objectId });
+      } catch {
+        /* best-effort */
+      }
+      await new Promise(r => setTimeout(r, 150));
+      ({ x, y } = await measure());
+      verdict = await hitTest(x, y);
+    }
+    if (verdict !== 'hit') {
+      throw new Error(
+        `click: "${label}" not hittable — point (${Math.round(x)},${Math.round(y)}) ${verdict}`,
+      );
+    }
+
+    await dispatchClickAt(tabId, x, y);
+    return { x, y, hit: true };
+  } finally {
+    await chrome.debugger.sendCommand(T, 'Runtime.releaseObject', { objectId }).catch(() => {});
+  }
+}
+
+/**
  * Neutralize ALL beforeunload handlers on the current page so "Leave site?"
  * never fires. Called before EVERY navigation (tabs.update, tabs.reload,
  * Page.navigate) and before tabs.remove (close).
@@ -1052,15 +1171,40 @@ async function click(params: { ref: string }): Promise<{ clicked: string; x: num
   const tabId = requireTab();
   const ref = params?.ref;
   if (!ref) throw new Error('click: ref is required');
-  // Resolve the ref → viewport coords via the debugger (executeScript hangs on XC SPA).
-  const coords = await evalInPage<{ x: number; y: number } | null>(
+  // Resolve the ref → live element handle, then click via the deterministic
+  // layout-engine + hit-test path (geometry from getContentQuads, not JS rects).
+  const objectId = await evalForObject(
     tabId,
-    `typeof __xcshResolveRef === 'function' ? __xcshResolveRef(${JSON.stringify(ref)}) : null`,
+    `(typeof __xcshResolveRefEl === 'function' ? __xcshResolveRefEl(${JSON.stringify(ref)}) : null)`,
   );
-  if (!coords) throw new Error(`click: could not resolve ref: ${ref}`);
-  const { x, y } = coords;
-  await dispatchClickAt(tabId, x, y);
+  if (!objectId) throw new Error(`click: could not resolve ref: ${ref}`);
+  const { x, y } = await clickElementByObjectId(tabId, objectId, `ref ${ref}`);
   return { clicked: ref, x, y };
+}
+
+/** Deterministic click by selector-resolver JS. The caller passes an expression
+ * that returns an Element (or null) — e.g. xcsh's element-returning resolver for
+ * role selectors, or a portal-option finder. We hold the element handle and click
+ * via the layout-engine + hit-test path. `wait_ms` polls for the element to appear
+ * (CDK portals render async). Never silently mis-clicks: occlusion fails loudly. */
+async function clickElement(params: {
+  js: string;
+  wait_ms?: number;
+}): Promise<{ clicked: string; x: number; y: number; hit: boolean }> {
+  const tabId = requireTab();
+  const js = params?.js;
+  if (typeof js !== 'string' || js.length === 0) throw new Error('click_element: js is required');
+  const waitMs = Math.min(Number(params?.wait_ms ?? 0), 20_000);
+  await ensureDebuggerAttached(tabId);
+  const deadline = Date.now() + waitMs;
+  let objectId = await evalForObject(tabId, js);
+  while (!objectId && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 200));
+    objectId = await evalForObject(tabId, js);
+  }
+  if (!objectId) throw new Error(`click_element: expression matched no element`);
+  const { x, y, hit } = await clickElementByObjectId(tabId, objectId, 'element');
+  return { clicked: 'element', x, y, hit };
 }
 
 /** Trusted click at explicit viewport coordinates. Lets callers act on elements
@@ -1181,6 +1325,11 @@ async function labelSelect(params: {
         if (idx < 0) return { portal: true, matched: false, options: texts.slice(0, 10), optionCount: spans.length };
         const el = spans[idx];
         el.scrollIntoView({ block: 'center', inline: 'center' });
+        // Tag the matched option so the deterministic click path can grab its
+        // live element handle (geometry from getContentQuads + hit-test) instead
+        // of clicking stale getBoundingClientRect coords.
+        document.querySelectorAll('[data-xcsh-pick]').forEach(n => n.removeAttribute('data-xcsh-pick'));
+        el.setAttribute('data-xcsh-pick', '1');
         const r = el.getBoundingClientRect();
         return {
           portal: true, matched: true, kind, text: texts[idx],
@@ -1211,8 +1360,17 @@ async function labelSelect(params: {
     throw new Error(`label_select: no option matching "${value}" within ${waitMs}ms${opts}`);
   }
 
-  // ── E. Click the option via trusted CDP (matches the confirmed coords). ──────
-  await dispatchClickAt(tabId, matchResult.x, matchResult.y);
+  // ── E. Click the option via the deterministic path (layout-engine coords +
+  // hit-test). Grab the tagged option's live handle; if the portal occludes it
+  // the hit-test fails loudly rather than mis-clicking. ────────────────────────
+  const optObj = await evalForObject(tabId, `document.querySelector('[data-xcsh-pick]')`);
+  if (optObj) {
+    await clickElementByObjectId(tabId, optObj, `option "${matchResult.text}"`);
+  } else {
+    // Tag lost (portal re-rendered) — fall back to the confirmed coords.
+    await dispatchClickAt(tabId, matchResult.x, matchResult.y);
+  }
+  await evalInPage(tabId, `document.querySelectorAll('[data-xcsh-pick]').forEach(n=>n.removeAttribute('data-xcsh-pick'))`).catch(() => {});
 
   // ── F. After selecting a key, a VALUE input appears. Type the value + Enter. ──
   // This commits the key=value label pair. Multiple labels can be added by calling
@@ -1613,6 +1771,10 @@ async function ensureDebuggerAttached(tabId: number): Promise<void> {
   // Enable Page so javascriptDialogOpening events fire and we can auto-handle
   // native "Leave site?"/alert/confirm dialogs (they would otherwise block).
   await chrome.debugger.sendCommand({ tabId }, 'Page.enable', {}).catch(() => {});
+  // Enable DOM so DOM.getContentQuads / DOM.scrollIntoViewIfNeeded / DOM.resolveNode
+  // are available — the deterministic, layout-engine click path (clickElementByObjectId)
+  // resolves clickable geometry from the renderer instead of JS getBoundingClientRect.
+  await chrome.debugger.sendCommand({ tabId }, 'DOM.enable', {}).catch(() => {});
 }
 
 // Keep `attachedTabs` consistent if the debugger detaches out-of-band

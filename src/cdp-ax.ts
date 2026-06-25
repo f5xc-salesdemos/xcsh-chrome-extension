@@ -88,16 +88,32 @@ export async function readAxTree(tabId: number): Promise<CdpAxNode> {
   };
 }
 
+/** Clickable center from the renderer's layout: largest visible content quad,
+ * falling back to the box model. CSS viewport px — the space Input.* consumes. */
 async function backendCenter(tabId: number, backendNodeId: number): Promise<{ x: number; y: number }> {
   const target = { tabId };
   try {
     await send(target, 'DOM.scrollIntoViewIfNeeded', { backendNodeId });
   } catch {
-    /* best-effort: some nodes can't scroll, getBoxModel may still work */
+    /* best-effort: some nodes can't scroll, geometry may still be valid */
   }
-  const { model } = (await send(target, 'DOM.getBoxModel', { backendNodeId })) as {
-    model: { content: number[] };
-  };
+  const { quads } = (await send(target, 'DOM.getContentQuads', { backendNodeId }).catch(() => ({
+    quads: [] as number[][],
+  }))) as { quads: number[][] };
+  let best: number[] | undefined;
+  let bestArea = 0;
+  for (const q of quads ?? []) {
+    const a =
+      Math.abs(
+        q[0] * q[3] - q[2] * q[1] + (q[2] * q[5] - q[4] * q[3]) + (q[4] * q[7] - q[6] * q[5]) + (q[6] * q[1] - q[0] * q[7]),
+      ) / 2;
+    if (a > bestArea) {
+      bestArea = a;
+      best = q;
+    }
+  }
+  if (best && bestArea > 1) return { x: (best[0] + best[4]) / 2, y: (best[1] + best[5]) / 2 };
+  const { model } = (await send(target, 'DOM.getBoxModel', { backendNodeId })) as { model: { content: number[] } };
   const c = model.content; // [x1,y1, x2,y2, x3,y3, x4,y4]
   return { x: (c[0] + c[4]) / 2, y: (c[1] + c[5]) / 2 };
 }
@@ -109,8 +125,21 @@ function backendId(ref: string): number {
 }
 
 export async function clickRef(tabId: number, ref: string): Promise<{ x: number; y: number }> {
-  const { x, y } = await backendCenter(tabId, backendId(ref));
   const target = { tabId };
+  const backendNodeId = backendId(ref);
+  const { x, y } = await backendCenter(tabId, backendNodeId);
+  // Hit-test: verify the point resolves to the target before dispatching.
+  const objectId = await resolveObject(tabId, ref);
+  const verdict = (
+    (await send(target, 'Runtime.callFunctionOn', {
+      objectId,
+      returnByValue: true,
+      functionDeclaration: `function(cx,cy){var h=document.elementFromPoint(cx,cy);return !h?'none':(h===this||this.contains(h)||h.contains(this))?'hit':'occluded:'+(h.tagName||'');}`,
+      arguments: [{ value: x }, { value: y }],
+    })) as { result?: { value?: string } }
+  ).result?.value;
+  await send(target, 'Runtime.releaseObject', { objectId }).catch(() => {});
+  if (verdict !== 'hit') throw new Error(`clickRef: ref ${ref} not hittable — point (${Math.round(x)},${Math.round(y)}) ${verdict}`);
   await send(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
   await send(target, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
   await send(target, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
