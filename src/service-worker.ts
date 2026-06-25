@@ -413,6 +413,9 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
     case 'key_press':
       return keyPress(params);
 
+    case 'label_select':
+      return labelSelect(params);
+
     case 'detach':
       return detach();
 
@@ -1083,6 +1086,178 @@ async function typeText(params: { text: string }): Promise<{ typed: string }> {
   await ensureDebuggerAttached(tabId);
   await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text });
   return { typed: text };
+}
+
+/** Atomically type into a CDK-portal typeahead, wait for the dropdown to render,
+ * and click the matching option — all within ONE handler so the input stays focused
+ * throughout. The root cause of previous failures was `javascript_tool` routing
+ * through `evaluateWithRecovery`, which detaches/reattaches the debugger and kills
+ * input focus, closing the CDK portal. Here we ONLY use plain `evalInPage`
+ * (Runtime.evaluate, no detach) and trusted `Input.*` CDP commands. */
+async function labelSelect(params: {
+  selector: string;
+  value: string;
+  label_value?: string;
+  wait_ms?: number;
+}): Promise<{ selected: string; matchedKind: string; value: string; labelValue: string; optionCount: number }> {
+  const tabId = requireTab();
+  const selector = params?.selector;
+  const value = params?.value ?? '';
+  const labelValue = params?.label_value ?? '';
+  // Cap well below the 30s bridge timeout so the handler finishes before the caller times out.
+  const waitMs = Math.min(Number(params?.wait_ms ?? 8_000), 20_000);
+  if (typeof selector !== 'string' || selector.length === 0)
+    throw new Error('label_select: selector is required');
+  await ensureDebuggerAttached(tabId);
+
+  // ── A. Locate the typeahead input and get its viewport coords. ──────────────
+  // evalInPage (Runtime.evaluate) does NOT defocus — safe to call with the input focused.
+  const selectorJson = JSON.stringify(selector);
+  const inputCoords = await evalInPage<{ found: boolean; x: number; y: number }>(
+    tabId,
+    `(() => {
+      const sel = ${selectorJson};
+      let el = null;
+      try { el = document.querySelector(sel); } catch {}
+      if (!el) {
+        el = [...document.querySelectorAll('input')].find(i =>
+          (i.placeholder || '').includes('Type to search') ||
+          (i.placeholder || '').includes('Select or Add Key'));
+      }
+      if (!el) return { found: false, x: 0, y: 0 };
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      const r = el.getBoundingClientRect();
+      return { found: true, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    })()`,
+  );
+  if (!inputCoords?.found) throw new Error(`label_select: input "${selector}" not found`);
+
+  // ── B. Click the input (trusted CDP — keeps focus). ─────────────────────────
+  await dispatchClickAt(tabId, inputCoords.x, inputCoords.y);
+
+  // ── C. Small settle, then type (Input.insertText keeps focus). ───────────────
+  await new Promise(r => setTimeout(r, 300));
+  await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text: value });
+
+  // ── D. Poll the CDK portal for a matching option. ───────────────────────────
+  // One evalInPage per poll iteration — returns match coords in the same round-trip
+  // so we can click immediately (no second eval that might close the portal).
+  const valueJson = JSON.stringify(value);
+  const deadline = Date.now() + waitMs;
+  let lastOptions: string[] = [];
+  let matchResult: { matched: boolean; kind: string; text: string; x: number; y: number; optionCount: number } | null = null;
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 250));
+    const poll = await evalInPage<{
+      portal: boolean;
+      matched?: boolean;
+      kind?: string;
+      text?: string;
+      x?: number;
+      y?: number;
+      optionCount?: number;
+      options?: string[];
+    }>(
+      tabId,
+      `(() => {
+        const want = ${valueJson};
+        const norm = t => (t || '').replace(/\\s+/g, ' ').trim();
+        const container = document.querySelector('.cdk-overlay-container');
+        if (!container) return { portal: false };
+        // Collect all visible inline-text nodes from the portal that look like option labels.
+        const spans = [...container.querySelectorAll('span, li, [role="option"]')].filter(e => {
+          const r = e.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && norm(e.textContent).length > 0;
+        });
+        if (!spans.length) return { portal: true, options: [] };
+        const texts = spans.map(e => norm(e.textContent));
+        const w = want.toLowerCase();
+        let kind = 'exact';
+        let idx = texts.findIndex(t => t.toLowerCase() === w);
+        if (idx < 0) { kind = 'startsWith'; idx = texts.findIndex(t => t.toLowerCase().startsWith(w)); }
+        if (idx < 0) { kind = 'includes';   idx = texts.findIndex(t => t.toLowerCase().includes(w)); }
+        if (idx < 0) { kind = 'custom';     idx = texts.findIndex(t => /assign a custom key/i.test(t)); }
+        if (idx < 0) return { portal: true, matched: false, options: texts.slice(0, 10), optionCount: spans.length };
+        const el = spans[idx];
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = el.getBoundingClientRect();
+        return {
+          portal: true, matched: true, kind, text: texts[idx],
+          x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+          optionCount: spans.length,
+        };
+      })()`,
+    );
+
+    if (!poll?.portal) continue; // portal not rendered yet — wait
+    if (!poll.matched) {
+      lastOptions = poll.options ?? [];
+      continue; // portal rendered but no match yet — may still be filtering
+    }
+    matchResult = {
+      matched: true,
+      kind: poll.kind ?? 'unknown',
+      text: poll.text ?? '',
+      x: poll.x ?? 0,
+      y: poll.y ?? 0,
+      optionCount: poll.optionCount ?? 0,
+    };
+    break;
+  }
+
+  if (!matchResult) {
+    const opts = lastOptions.length ? ` (saw: ${lastOptions.slice(0, 8).join(', ')})` : ' (portal never rendered)';
+    throw new Error(`label_select: no option matching "${value}" within ${waitMs}ms${opts}`);
+  }
+
+  // ── E. Click the option via trusted CDP (matches the confirmed coords). ──────
+  await dispatchClickAt(tabId, matchResult.x, matchResult.y);
+
+  // ── F. After selecting a key, a VALUE input appears. Type the value + Enter. ──
+  // This commits the key=value label pair. Multiple labels can be added by calling
+  // label_select again (each call = one key+value).
+  if (labelValue) {
+    await new Promise(r => setTimeout(r, 1500));
+    // Find the value input that appeared after key selection
+    const valInput = await evalInPage<{ found: boolean; x: number; y: number }>(
+      tabId,
+      `(() => {
+        // Look for a new input that appeared after the key selection
+        // It's typically a text input near the label key, with placeholder containing "value" or "enter"
+        const inputs = [...document.querySelectorAll('input')].filter(e => {
+          const r = e.getBoundingClientRect();
+          const ph = (e.placeholder || '').toLowerCase();
+          return r.width > 0 && (ph.includes('value') || ph.includes('enter') || ph === '');
+        });
+        // The newest/last visible empty input is likely the value field
+        const el = inputs.filter(e => !e.value).pop() || inputs.pop();
+        if (!el) return { found: false, x: 0, y: 0 };
+        el.scrollIntoView({ block: 'center' });
+        const r = el.getBoundingClientRect();
+        return { found: true, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      })()`,
+    );
+    if (valInput?.found) {
+      await dispatchClickAt(tabId, valInput.x, valInput.y);
+      await new Promise(r => setTimeout(r, 200));
+      await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text: labelValue });
+      await new Promise(r => setTimeout(r, 200));
+      // Press Enter to commit the value
+      const enterBase = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 };
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', { type: 'keyDown', ...enterBase });
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', { type: 'keyUp', ...enterBase });
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  return {
+    selected: matchResult.text,
+    matchedKind: matchResult.kind,
+    value,
+    labelValue,
+    optionCount: matchResult.optionCount,
+  };
 }
 
 async function screenshot(): Promise<{ data: string; format: string }> {
