@@ -29,11 +29,11 @@ updates:
       - "dependencies"
     open-pull-requests-limit: 10
     groups:
-      # First-party @f5xc-salesdemos/* packages: track latest daily, all update types
+      # First-party @f5-sales-demo/* packages: track latest daily, all update types
       # (auto-merged once CI is green) so internal deps never drift behind.
       f5-internal:
         patterns:
-          - "@f5xc-salesdemos/*"
+          - "@f5-sales-demo/*"
         update-types:
           - "major"
           - "minor"

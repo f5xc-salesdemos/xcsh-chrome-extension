@@ -1,5 +1,5 @@
 {
-  "name": "@f5xc-salesdemos/xcsh-chrome-extension",
+  "name": "@f5-sales-demo/xcsh-chrome-extension",
   "version": "0.1.0",
   "private": true,
   "type": "module",

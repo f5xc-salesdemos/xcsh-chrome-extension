@@ -35,7 +35,7 @@ xcsh (the CLI AI assistant) connects to this extension through a local native-me
 • The extension only operates on F5 Distributed Cloud console domains
 
 **Requirements:**
-• xcsh CLI installed (https://github.com/f5xc-salesdemos/xcsh)
+• xcsh CLI installed (https://github.com/f5-sales-demo/xcsh)
 • `xcsh chrome setup` run once to install the native-messaging host
 • Logged into your F5 XC tenant in Chrome
 

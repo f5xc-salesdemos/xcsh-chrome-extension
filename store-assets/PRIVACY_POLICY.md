@@ -50,4 +50,4 @@ We may update this privacy policy from time to time. Changes will be reflected i
 ## Contact
 
 For questions about this privacy policy, please open an issue at:
-https://github.com/f5xc-salesdemos/xcsh-chrome-extension/issues
+https://github.com/f5-sales-demo/xcsh-chrome-extension/issues
