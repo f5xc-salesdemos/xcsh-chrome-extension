@@ -31,7 +31,7 @@ updates:
     groups:
       # First-party @f5xc-salesdemos/* packages: track latest daily, all update types
       # (auto-merged once CI is green) so internal deps never drift behind.
-      f5xc-internal:
+      f5-internal:
         patterns:
           - "@f5xc-salesdemos/*"
         update-types:
