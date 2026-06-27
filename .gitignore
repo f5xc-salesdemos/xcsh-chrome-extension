@@ -195,4 +195,3 @@ pi-*.html
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
 packages/coding-agent/src/internal-urls/build-info.generated.ts
 packages/typescript-edit-benchmark/runs/
-design-mockups/
