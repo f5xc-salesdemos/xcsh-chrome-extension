@@ -1,4 +1,6 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 await Bun.build({
   entrypoints: ['src/accessibility-tree.ts'],
@@ -45,11 +47,11 @@ console.log('built dist/');
 
 // Embed the dev key into dist/manifest.json for a stable unpacked extension ID.
 // Without this, every build produces a different ID → Chrome creates a duplicate.
-import { execSync } from "node:child_process";
 const keyPem = path.resolve(import.meta.dir, "key.pem");
 if (fs.existsSync(keyPem)) {
-  const der = execSync(`openssl rsa -in ${keyPem} -pubout -outform DER 2>/dev/null`);
+  const der = execFileSync('openssl', ['rsa', '-in', keyPem, '-pubout', '-outform', 'DER'], { stdio: ['pipe', 'pipe', 'ignore'] });
   const manifest = JSON.parse(fs.readFileSync(path.resolve(import.meta.dir, "dist/manifest.json"), "utf8"));
   manifest.key = der.toString("base64");
   fs.writeFileSync(path.resolve(import.meta.dir, "dist/manifest.json"), JSON.stringify(manifest, null, 2));
+  console.log('embedded dev key → stable unpacked ID');
 }
