@@ -1,15 +1,14 @@
 /**
- * xcsh service worker — native-messaging client + the 5 tools.
+ * xcsh service worker — WebSocket bridge client + the 5 tools.
  *
- * Connects to the native host `com.xcsh.xcsh.chrome_host`, handles the tool
- * protocol (`tool_request` -> `tool_result`, `ping` -> `pong`), and drives the
- * scoped F5 XC console tab via chrome.scripting + chrome.debugger.
+ * Connects to xcsh's bridge server over WebSocket (`ws://127.0.0.1:19222`),
+ * handles the tool protocol (`tool_request` -> `tool_result`, `ping` -> `pong`),
+ * and drives the scoped F5 XC console tab via chrome.scripting + chrome.debugger.
  */
 
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
-const NATIVE_HOST = 'com.xcsh.xcsh.chrome_host';
-const RECONNECT_ALARM = 'reconnect';
+const BRIDGE_URL = 'ws://127.0.0.1:19222';
 const MANAGED_POLICY_ALARM = 'managed-policy-refresh';
 const VERSION = '0.1.0';
 const NAV_TIMEOUT_MS = 30_000;
@@ -83,9 +82,9 @@ function isKeycloakLoginUrl(u: string): boolean {
   }
 }
 
-// --- Native-messaging connection + lifecycle -------------------------------
+// --- WebSocket bridge connection + lifecycle -------------------------------
 
-let port: chrome.runtime.Port | null = null;
+let ws: WebSocket | null = null;
 
 // The console tab the SW is currently driving (set in `navigate`).
 let targetTabId: number | undefined;
@@ -174,55 +173,54 @@ function startKeepAlive(): void {
   }, 20_000);
 }
 
-// Fast-reconnect: the ~30s alarm is too slow when a new bridge appears (e.g. a
-// fresh `xcsh` subprocess starts its bridge and probes for the extension). On
-// disconnect, retry connectNative on a short interval — and, because the SW is
-// kept alive above, keep retrying INDEFINITELY with a capped backoff so the
-// extension re-attaches whenever a bridge next appears (not just within the
-// first 30s). Idle steady-state polls every ~8s (the native host exits instantly
-// when no bridge is listening, so each poll is cheap). The 30s alarm stays as a
-// backstop for the case where the SW was hard-killed and restarted.
-const RECONNECT_BACKOFF_MS = [500, 1000, 1500, 2000, 3000, 5000, 8000];
+// Fast-reconnect: when the WebSocket closes (e.g. xcsh's bridge stopped, or no
+// bridge was listening yet), retry on a fixed short interval. Because the SW is
+// kept alive above, this keeps retrying so the extension re-attaches whenever a
+// bridge next appears. WebSocket `onclose` drives reconnection; the timer is a
+// single in-flight retry, coalesced so overlapping closes don't stack timers.
+const RECONNECT_DELAY_MS = 1500;
 let fastReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
 function scheduleFastReconnect(): void {
-  if (port || fastReconnectTimer) return;
-  let attempt = 0;
-  const tick = () => {
+  if (fastReconnectTimer) return;
+  fastReconnectTimer = setTimeout(() => {
     fastReconnectTimer = null;
-    if (port) return;
+    if (ws?.readyState === WebSocket.OPEN) return;
     connect();
-    if (!port) {
-      const delay = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
-      attempt++;
-      fastReconnectTimer = setTimeout(tick, delay);
-    }
-  };
-  fastReconnectTimer = setTimeout(tick, RECONNECT_BACKOFF_MS[0]);
+  }, RECONNECT_DELAY_MS);
 }
 
 function connect(): void {
-  if (port) return;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   try {
-    port = chrome.runtime.connectNative(NATIVE_HOST);
-    port.onMessage.addListener(onMessage);
-    port.onDisconnect.addListener(() => {
-      port = null;
-      // Re-attach quickly so a newly-started bridge's short probe finds us.
+    const sock = new WebSocket(BRIDGE_URL);
+    ws = sock;
+    sock.onmessage = (ev) => onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data);
+    sock.onclose = () => {
+      // Only clear the shared ref if this socket is still the current one, then
+      // re-attach quickly so a newly-started bridge's probe finds us.
+      if (ws === sock) ws = null;
       scheduleFastReconnect();
-    });
+    };
+    sock.onerror = () => {}; // onclose follows — reconnect is handled there.
   } catch {
-    // Native host not available yet (e.g. xcsh not running at startup).
-    port = null;
+    // WebSocket construction failed (e.g. bridge URL unreachable at startup).
+    ws = null;
     scheduleFastReconnect();
   }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
+/** Send a JSON message to the bridge if the socket is open. */
+function send(msg: unknown): void {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: bridge message shape
 function onMessage(msg: any): void {
   if (!msg || typeof msg !== 'object') return;
 
   if (msg.type === 'ping') {
-    port?.postMessage({ type: 'pong' });
+    send({ type: 'pong' });
     return;
   }
 
@@ -230,10 +228,10 @@ function onMessage(msg: any): void {
     const { id, tool, params } = msg;
     runTool(tool, params)
       .then((content) => {
-        port?.postMessage({ type: 'tool_result', id, content, is_error: false });
+        send({ type: 'tool_result', id, content, is_error: false });
       })
       .catch((e) => {
-        port?.postMessage({
+        send({
           type: 'tool_result',
           id,
           content: String(e),
@@ -244,11 +242,10 @@ function onMessage(msg: any): void {
 }
 
 // Keep the SW alive (so reconnection is always fast) and connect on startup.
+// WebSocket `onclose` schedules a reconnect if the initial connect finds no
+// bridge, so no explicit post-connect retry is needed here.
 startKeepAlive();
 connect();
-// If the initial connect found no bridge, start polling immediately rather than
-// waiting for the first disconnect or the 30s alarm.
-if (!port) scheduleFastReconnect();
 
 // Read the managed enterprise policy on startup.
 refreshManagedPolicy();
@@ -260,15 +257,11 @@ chrome.storage.onChanged.addListener((_changes, areaName) => {
   }
 });
 
-// Reconnect alarm (~0.5 min) — reconnects whenever the port has been nulled.
-chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
 // Managed-policy refresh alarm (~5 min) — picks up policy pushes even if the
 // onChanged event was missed while the SW was suspended.
 chrome.alarms.create(MANAGED_POLICY_ALARM, { periodInMinutes: 5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === RECONNECT_ALARM && !port) {
-    connect();
-  } else if (alarm.name === MANAGED_POLICY_ALARM) {
+  if (alarm.name === MANAGED_POLICY_ALARM) {
     refreshManagedPolicy();
   }
 });
@@ -279,7 +272,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return;
 
   if (msg.type === 'status_request') {
-    sendResponse({ connected: !!port });
+    sendResponse({ connected: ws?.readyState === WebSocket.OPEN });
     return; // synchronous response
   }
 
@@ -330,7 +323,7 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
 
     case 'reload': {
       // Reload the extension programmatically (re-reads dist/ from disk).
-      // The SW restarts, native port reconnects via the 30s alarm.
+      // The SW restarts; the WebSocket reconnects via connect() on startup.
       chrome.runtime.reload();
       return { reloading: true };
     }
