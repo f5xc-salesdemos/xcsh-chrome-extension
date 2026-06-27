@@ -34,26 +34,28 @@ let scanner: HTMLDivElement | undefined;
 let badge: HTMLDivElement | undefined;
 
 function createElements(): void {
-  // Thin red "scanner" bar pinned to the very top edge: a wide, soft highlight
-  // glides back and forth over a faint track. The sweep uses ease-in-out so it
-  // slows and reverses smoothly at each edge (velocity hits zero at the turn) —
-  // a calm, non-flickering "agent is thinking" signal that, unlike a full-page
-  // glow, barely touches the page. Isolated in a Shadow DOM so the host page's
-  // CSS can never affect it.
+  // Red "scanner" bar pinned to the very top edge: a wide, bright highlight glides
+  // back and forth over a tinted track, with a soft glow bloom beneath it. The
+  // sweep uses ease-in-out so it slows and reverses smoothly at each edge (velocity
+  // hits zero at the turn) — a clear but non-flickering "agent is thinking" signal.
+  // overflow:hidden clips the highlight to the bar height; the host's own
+  // box-shadow is the part that blooms below. Isolated in a Shadow DOM so the host
+  // page's CSS can never affect it.
   scanner = document.createElement('div');
   scanner.id = SCANNER_ID;
   scanner.style.cssText =
-    'position:fixed;top:0;left:0;width:100%;height:4px;z-index:2147483647;opacity:0;pointer-events:none;overflow:hidden;';
+    'position:fixed;top:0;left:0;width:100%;height:6px;z-index:2147483647;opacity:0;pointer-events:none;overflow:hidden;box-shadow:0 1px 12px 0 rgba(202,38,10,.6);';
   const sroot = scanner.attachShadow({ mode: 'open' });
   sroot.innerHTML =
     '<style>' +
     ':host{display:block}' +
     '.track{position:absolute;inset:0}' +
-    `.track::before{content:"";position:absolute;inset:0;background:${RED};opacity:.16}` +
-    '.blob{position:absolute;top:0;height:100%;width:34vw;filter:blur(1px);' +
-    'background:linear-gradient(90deg,transparent,rgba(202,38,10,.85) 45%,#e8451f 50%,rgba(202,38,10,.85) 55%,transparent);' +
+    `.track::before{content:"";position:absolute;inset:0;background:${RED};opacity:.34}` +
+    '.blob{position:absolute;top:0;height:100%;width:26vw;' +
+    'filter:blur(.5px) drop-shadow(0 0 7px rgba(255,106,61,.95)) drop-shadow(0 0 14px rgba(202,38,10,.6));' +
+    'background:linear-gradient(90deg,transparent,#e8330f 35%,#ff6a3d 50%,#e8330f 65%,transparent);' +
     'animation:xcsh-sweep 3.6s ease-in-out infinite alternate}' +
-    '@keyframes xcsh-sweep{from{transform:translateX(-17vw)}to{transform:translateX(83vw)}}' +
+    '@keyframes xcsh-sweep{from{transform:translateX(-13vw)}to{transform:translateX(87vw)}}' +
     '</style>' +
     '<div class="track"><div class="blob"></div></div>';
   document.documentElement.appendChild(scanner);
