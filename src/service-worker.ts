@@ -370,6 +370,9 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
     case 'read_network':
       return readNetwork(params);
 
+    case 'wait_for_api_response':
+      return waitForApiResponse(params);
+
     case 'file_upload':
       return fileUpload(params);
 
@@ -1672,6 +1675,57 @@ async function readConsole(params: { pattern?: string }): Promise<{ messages: Ar
   }));
   if (pattern) entries = entries.filter((e) => e.text?.includes(pattern));
   return { messages: entries.slice(-100) };
+}
+
+/**
+ * Wait for an API response matching a URL pattern in the network buffer.
+ * Used after clicking Save to detect the server's response in REAL TIME
+ * instead of guessing with a waitFor timeout. The F5 XC console POSTs to
+ * `/api/config/namespaces/.../` on save — this watches for that response
+ * and returns immediately with the status code + any error body.
+ */
+async function waitForApiResponse(params: {
+  pattern?: string;
+  timeout_ms?: number;
+}): Promise<{ found: boolean; status?: number; url?: string; error?: string }> {
+  await enableNetworkObserver();
+  const pattern = params?.pattern ?? '/api/config/';
+  const deadline = Date.now() + (params?.timeout_ms ?? 15000);
+  const startIdx = networkBuffer.length; // only check NEW entries
+
+  while (Date.now() < deadline) {
+    for (let i = startIdx; i < networkBuffer.length; i++) {
+      const e = networkBuffer[i] as any;
+      if (e.method !== 'Network.responseReceived') continue;
+      const url = e.response?.url ?? '';
+      const status = e.response?.status ?? 0;
+      if (!url.includes(pattern)) continue;
+
+      // Found an API response — check if it's the save POST/PUT
+      if (status >= 200 && status < 300) {
+        return { found: true, status, url };
+      }
+      // Server rejected (4xx/5xx) — try to read the response body for the error
+      if (status >= 400) {
+        let error = `HTTP ${status}`;
+        try {
+          const tabId = requireTab();
+          const body = await chrome.debugger.sendCommand(
+            { tabId },
+            'Network.getResponseBody',
+            { requestId: e.requestId },
+          ) as { body?: string };
+          if (body?.body) {
+            const parsed = JSON.parse(body.body);
+            error = parsed.message ?? parsed.error ?? JSON.stringify(parsed).slice(0, 200);
+          }
+        } catch { /* body not available */ }
+        return { found: true, status, url, error };
+      }
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  return { found: false, error: 'no matching API response within timeout' };
 }
 
 async function readNetwork(params: { pattern?: string }): Promise<{
