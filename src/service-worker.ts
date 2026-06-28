@@ -1105,6 +1105,14 @@ async function find(params: {
  * (not synthetic) events are required for Angular-zone handlers (e.g. vsui
  * dropdowns / form submit buttons) to fire and run change detection. */
 async function dispatchClickAt(tabId: number, x: number, y: number): Promise<void> {
+  // Visual cue BEFORE the click — the fingerprint must bloom before the click
+  // could dismiss a dialog/window (the overlay needs time to render, and if the
+  // click navigates or closes a panel, a post-click overlay may never show).
+  // Only during a deliberate "explain" walkthrough; best-effort (the content
+  // script may not be present yet, e.g. mid-navigation).
+  if (explainMode) {
+    chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'fingerprint', x, y }).catch(() => {});
+  }
   // Move the pointer over the target first — some controls (Angular Material /
   // vsui buttons) only react once they see a hover/pointer-position update.
   await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
@@ -1126,12 +1134,6 @@ async function dispatchClickAt(tabId: number, x: number, y: number): Promise<voi
     button: 'left',
     clickCount: 1,
   });
-  // Visual cue for human watchers — ONLY during a deliberate "explain" walkthrough
-  // (off under fast automation, where a burst of clicks is just a blur). Best-effort:
-  // the page may not have the content script yet (e.g. mid-navigation).
-  if (explainMode) {
-    chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'fingerprint', x, y }).catch(() => {});
-  }
 }
 
 /** Enter/leave explain mode (the gate for all on-page annotation overlays). */
