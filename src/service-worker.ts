@@ -6,6 +6,8 @@
  * and drives the scoped F5 XC console tab via chrome.scripting + chrome.debugger.
  */
 
+import { buildCapabilities, getToolDef, toolNames } from './capabilities';
+import { runDispatch } from './dispatch';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
 const BRIDGE_URL = 'ws://127.0.0.1:19222';
@@ -308,9 +310,9 @@ function stopAgent(): void {
 
 // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
 async function runTool(tool: string, params: any): Promise<unknown> {
-  // Pulse the on-page indicator while any non-trivial tool runs. `set_explain_mode`
-  // takes no page action, so it stays silent like `ping`.
-  const broadcastsIndicator = tool !== 'ping' && tool !== 'set_explain_mode';
+  // Pulse the on-page indicator while any non-trivial tool runs. `ping`,
+  // `capabilities`, and `set_explain_mode` take no page action, so they stay silent.
+  const broadcastsIndicator = tool !== 'ping' && tool !== 'capabilities' && tool !== 'set_explain_mode';
   if (broadcastsIndicator && targetTabId !== undefined) {
     chrome.tabs.sendMessage(targetTabId, { type: 'indicator_show' }).catch(() => {});
   }
@@ -323,118 +325,67 @@ async function runTool(tool: string, params: any): Promise<unknown> {
   }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
-async function dispatchTool(tool: string, params: any): Promise<unknown> {
-  switch (tool) {
-    case 'ping':
-      return { ok: true, version: VERSION };
+// Tool handlers, paired to the published descriptors in `capabilities.ts` by name.
+// Dispatch runs through `runDispatch`, which validates params against the contract
+// before invoking the handler — so the schema is load-bearing, not just docs.
+// biome-ignore lint/suspicious/noExplicitAny: handlers receive contract-validated params
+const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>> = {
+  ping: () => ({ ok: true, version: VERSION }),
+  capabilities: () => buildCapabilities(VERSION),
+  reload: () => {
+    // Reload the extension (re-reads dist/ from disk); the SW restarts and the
+    // WebSocket reconnects via connect() on startup.
+    chrome.runtime.reload();
+    return { reloading: true };
+  },
+  debug_exec: () => {
+    // Diagnostic: test if __xcshReadAx is available via the debugger path.
+    const tabId = requireTab();
+    return evalInPage(tabId, '({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})');
+  },
+  navigate,
+  login,
+  select_option: selectOption,
+  scroll_to: scrollTo,
+  get_page_text: getPageText,
+  javascript_tool: javascriptTool,
+  tabs_list: tabsList,
+  tabs_create: tabsCreate,
+  tabs_close: tabsClose,
+  resize_window: resizeWindow,
+  read_console: readConsole,
+  read_network: readNetwork,
+  wait_for_api_response: waitForApiResponse,
+  file_upload: fileUpload,
+  browser_batch: browserBatch,
+  read_ax: readAx,
+  wait_for: waitFor,
+  assert_text: assertText,
+  find,
+  click,
+  click_element: clickElement,
+  click_xy: clickXy,
+  type_text: typeText,
+  screenshot,
+  form_input: formInput,
+  key_press: keyPress,
+  label_select: labelSelect,
+  detach,
+  set_explain_mode: setExplainMode,
+  annotate,
+};
 
-    case 'reload': {
-      // Reload the extension programmatically (re-reads dist/ from disk).
-      // The SW restarts; the WebSocket reconnects via connect() on startup.
-      chrome.runtime.reload();
-      return { reloading: true };
-    }
+// Fail fast (at SW load) if the dispatch map and the published contract diverge —
+// a handler without a descriptor, or a described tool without a handler.
+for (const name of Object.keys(TOOL_HANDLERS)) {
+  if (!getToolDef(name)) throw new Error(`tool "${name}" has a handler but no descriptor in capabilities.ts`);
+}
+for (const name of toolNames()) {
+  if (!(name in TOOL_HANDLERS)) throw new Error(`tool "${name}" is described but has no handler`);
+}
 
-    case 'debug_exec': {
-      // Diagnostic: test if __xcshReadAx is available via the debugger path.
-      const tabId = requireTab();
-      return evalInPage(tabId, '({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})');
-    }
-
-    case 'navigate':
-      return navigate(params);
-
-    case 'login':
-      return login(params);
-
-    case 'select_option':
-      return selectOption(params);
-
-    case 'scroll_to':
-      return scrollTo(params);
-
-    case 'get_page_text':
-      return getPageText();
-
-    case 'javascript_tool':
-      return javascriptTool(params);
-
-    case 'tabs_list':
-      return tabsList();
-
-    case 'tabs_create':
-      return tabsCreate(params);
-
-    case 'tabs_close':
-      return tabsClose(params);
-
-    case 'resize_window':
-      return resizeWindow(params);
-
-    case 'read_console':
-      return readConsole(params);
-
-    case 'read_network':
-      return readNetwork(params);
-
-    case 'wait_for_api_response':
-      return waitForApiResponse(params);
-
-    case 'file_upload':
-      return fileUpload(params);
-
-    case 'browser_batch':
-      return browserBatch(params);
-
-    case 'read_ax':
-      return readAx();
-
-    case 'wait_for':
-      return waitFor(params);
-
-    case 'assert_text':
-      return assertText(params);
-
-    case 'find':
-      return find(params);
-
-    case 'click':
-      return click(params);
-
-    case 'click_element':
-      return clickElement(params);
-
-    case 'click_xy':
-      return clickXy(params);
-
-    case 'type_text':
-      return typeText(params);
-
-    case 'screenshot':
-      return screenshot();
-
-    case 'form_input':
-      return formInput(params);
-
-    case 'key_press':
-      return keyPress(params);
-
-    case 'label_select':
-      return labelSelect(params);
-
-    case 'detach':
-      return detach();
-
-    case 'set_explain_mode':
-      return setExplainMode(params);
-
-    case 'annotate':
-      return annotate(params);
-
-    default:
-      throw new Error(`unknown tool: ${tool}`);
-  }
+function dispatchTool(tool: string, params: unknown): Promise<unknown> {
+  return runDispatch(tool, params, TOOL_HANDLERS);
 }
 
 async function navigate(params: { url: string }): Promise<{ tabId: number }> {

@@ -1,0 +1,686 @@
+{
+  "version": "0.1.0",
+  "contractVersion": "1.0.0",
+  "protocol": "tool_request/result",
+  "tools": [
+    {
+      "name": "ping",
+      "summary": "Liveness check; returns { ok, version }.",
+      "category": "meta",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "capabilities",
+      "summary": "Return this self-describing capability manifest (tools + features + versions).",
+      "category": "meta",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "reload",
+      "summary": "Reload the extension (re-reads dist/ from disk).",
+      "category": "meta",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "debug_exec",
+      "summary": "Diagnostic: probe in-page bridge availability.",
+      "category": "meta",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "detach",
+      "summary": "Detach the debugger from the target tab.",
+      "category": "meta",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "navigate",
+      "summary": "Navigate the console tab to a scoped https URL.",
+      "category": "navigation",
+      "params": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "login",
+      "summary": "Drive the F5 XC OIDC/Keycloak login end-to-end.",
+      "category": "navigation",
+      "params": {
+        "type": "object",
+        "required": [
+          "email",
+          "password",
+          "consoleUrl"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "consoleUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "scroll_to",
+      "summary": "Scroll an AX-ref element into view.",
+      "category": "navigation",
+      "params": {
+        "type": "object",
+        "required": [
+          "ref"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "resize_window",
+      "summary": "Resize the browser window.",
+      "category": "navigation",
+      "params": {
+        "type": "object",
+        "required": [
+          "width",
+          "height"
+        ],
+        "properties": {
+          "width": {
+            "type": "number"
+          },
+          "height": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "tabs_list",
+      "summary": "List scoped console tabs.",
+      "category": "navigation",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {}
+    },
+    {
+      "name": "tabs_create",
+      "summary": "Open a new tab at a scoped URL.",
+      "category": "navigation",
+      "params": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "tabs_close",
+      "summary": "Close a tab by id.",
+      "category": "navigation",
+      "params": {
+        "type": "object",
+        "required": [
+          "tabId"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "click",
+      "summary": "Deterministic click of an AX-ref element (layout-engine coords + hit-test).",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "ref"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "click_element",
+      "summary": "Click the element returned by a JS expression (polls; occlusion-safe).",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "js"
+        ],
+        "properties": {
+          "js": {
+            "type": "string"
+          },
+          "wait_ms": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "click_xy",
+      "summary": "Trusted click at explicit viewport coordinates.",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "type_text",
+      "summary": "Type text into the focused element (trusted input).",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "form_input",
+      "summary": "Set a form field value by AX ref.",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "ref",
+          "value"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "key_press",
+      "summary": "Dispatch a key press.",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "select_option",
+      "summary": "Select an option in a native <select> by AX ref.",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "ref",
+          "value"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "label_select",
+      "summary": "Type into a CDK-portal typeahead and click the matching option.",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "selector",
+          "value"
+        ],
+        "properties": {
+          "selector": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "label_value": {
+            "type": "string"
+          },
+          "wait_ms": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "file_upload",
+      "summary": "Upload files (base64 data URIs) to a file input by AX ref.",
+      "category": "interaction",
+      "params": {
+        "type": "object",
+        "required": [
+          "ref",
+          "files"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "read_ax",
+      "summary": "Read the accessibility tree of the page.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "get_page_text",
+      "summary": "Return the page text.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "find",
+      "summary": "Find AX nodes matching a locator.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "required": [
+          "selector"
+        ],
+        "properties": {
+          "selector": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "wait_for",
+      "summary": "Wait for an AX node matching a locator to appear.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "required": [
+          "selector"
+        ],
+        "properties": {
+          "selector": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "assert_text",
+      "summary": "Assert an element contains expected text.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "required": [
+          "selector",
+          "expected"
+        ],
+        "properties": {
+          "selector": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "screenshot",
+      "summary": "Capture a screenshot (base64 PNG).",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "read_console",
+      "summary": "Read buffered console messages, optionally filtered by pattern.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "read_network",
+      "summary": "Read buffered network events, optionally filtered by pattern.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "wait_for_api_response",
+      "summary": "Wait for a network response whose URL matches a pattern.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "javascript_tool",
+      "summary": "Evaluate arbitrary JS in the page (length-capped).",
+      "category": "script",
+      "params": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "browser_batch",
+      "summary": "Run a batch of { tool, params } actions in sequence.",
+      "category": "script",
+      "params": {
+        "type": "object",
+        "required": [
+          "actions"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "tool"
+              ],
+              "properties": {
+                "tool": {
+                  "type": "string"
+                },
+                "params": {}
+              }
+            }
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "set_explain_mode",
+      "summary": "Enter/leave explain mode — the gate for all on-page annotation overlays.",
+      "category": "annotation",
+      "params": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "flags": {}
+    },
+    {
+      "name": "annotate",
+      "summary": "Draw an overlay annotation (fingerprint/highlight). No-op unless explain mode is on.",
+      "category": "annotation",
+      "params": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "w": {
+            "type": "number"
+          },
+          "h": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "requiresExplainMode": true
+      }
+    }
+  ],
+  "features": {
+    "explainMode": {
+      "tool": "set_explain_mode",
+      "default": false,
+      "description": "A deliberate, human-paced walkthrough mode. While on, on-page annotation overlays are shown; off by default (fast automation shows nothing)."
+    },
+    "overlays": {
+      "tool": "annotate",
+      "requiresExplainMode": true,
+      "autoFingerprintOnClick": true,
+      "kinds": [
+        "fingerprint",
+        "highlight"
+      ],
+      "description": "Transient annotation overlays. In explain mode, clicks auto-draw a fingerprint; `annotate` draws a named overlay by ref or coordinates."
+    },
+    "capture": {
+      "tool": "screenshot",
+      "description": "Capture a screenshot (base64 PNG) — for headless annotated-capture flows."
+    },
+    "viewport": {
+      "tool": "resize_window",
+      "description": "Control the browser window size."
+    }
+  }
+}

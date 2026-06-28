@@ -14,5 +14,8 @@
     "@types/chrome": "^0.2.0",
     "linkedom": "^0.18.5",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.49"
   }
 }
