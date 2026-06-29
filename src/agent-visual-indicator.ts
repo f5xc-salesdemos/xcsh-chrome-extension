@@ -15,6 +15,11 @@
  * and wires runtime messages to the envelope. The service worker fires show/hide
  * around every tool call, so the hold plus the slow release bridge the brief
  * gaps between consecutive calls: a burst reads as one steady, breathing shimmer.
+ *
+ * The capacitor-style release applies to the badge only. The scanner's activity
+ * signal is its back-and-forth sweep, not a decaying glow, so it stays lit and
+ * sweeping at full brightness through the whole hold+release window and then
+ * leaves with just a brief fade at cleanup (rather than the long exhale).
  */
 
 import { F5_LOGO_DATA_URI } from './f5-logo';
@@ -29,11 +34,15 @@ const RED = '#ca260a'; // xcsh CLI frame red — keeps brand parity with the ter
 // Envelope shape — a "breath": a quick organic rise (not a jarring snap), a brief
 // hold at full, then a long gentle exhale. A retrigger during the exhale cancels
 // the discharge and re-runs onAttack, so the ATTACK transition glides (portamento)
-// from the current decayed opacity back to full rather than snapping.
+// from the current decayed opacity back to full rather than snapping. The exhale
+// (RELEASE) is the badge's capacitor discharge only; the scanner stays at full
+// through it and exits with the short SCANNER_EXIT fade at cleanup.
 const ATTACK = 'opacity 180ms cubic-bezier(.22,.61,.36,1)'; // rapid, organic breath-in
 const HOLD_MS = 600; // minimum dwell at full brightness before the discharge begins
-const RELEASE = 'opacity 1800ms ease-out'; // long, gentle exhale (capacitor discharge)
+const RELEASE = 'opacity 1800ms ease-out'; // long, gentle exhale (badge capacitor discharge)
 const CLEANUP_MS = 1900; // remove from DOM once the release has fully faded (>= RELEASE)
+const SCANNER_EXIT = 'opacity 240ms ease-out'; // brief fade so the bar doesn't pop at cleanup
+const SCANNER_EXIT_MS = 240; // remove the bar once that fade has elapsed
 
 let scanner: HTMLDivElement | undefined;
 let badge: HTMLDivElement | undefined;
@@ -113,15 +122,24 @@ const effects: EnvelopeEffects = {
   },
   onRelease(): void {
     if (!scanner || !badge) return;
-    scanner.style.transition = RELEASE;
-    scanner.style.opacity = '0';
+    // The scanner's activity signal is its sweep, not a decaying glow — leave it lit
+    // and sweeping through the bridge window; it exits with a brief fade at cleanup.
+    // Only the badge does the gentle capacitor discharge.
     badge.style.transition = RELEASE;
     badge.style.opacity = '0';
     badge.style.pointerEvents = 'none'; // faded-out emblem must not eat clicks
   },
   onCleanup(): void {
-    scanner?.remove();
-    badge?.remove();
+    badge?.remove(); // already at opacity 0 from the discharge
+    // The scanner stayed bright through the bridge/exhale; give it a brief fade so it
+    // doesn't pop, then remove. Capture the ref locally — the module var is nulled now,
+    // so a fresh show() during the fade builds a new bar while this one self-removes.
+    if (scanner) {
+      const exiting = scanner;
+      exiting.style.transition = SCANNER_EXIT;
+      exiting.style.opacity = '0';
+      setTimeout(() => exiting.remove(), SCANNER_EXIT_MS);
+    }
     scanner = undefined;
     badge = undefined;
   },
