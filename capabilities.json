@@ -64,6 +64,25 @@
       }
     },
     {
+      "name": "set_bridge_port",
+      "summary": "Set the WebSocket bridge port (persists across reload; enables multi-session on different ports).",
+      "category": "meta",
+      "params": {
+        "type": "object",
+        "required": [
+          "port"
+        ],
+        "properties": {
+          "port": {
+            "type": "number"
+          }
+        }
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
       "name": "navigate",
       "summary": "Navigate the console tab to a scoped https URL.",
       "category": "navigation",

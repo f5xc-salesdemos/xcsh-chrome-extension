@@ -55,6 +55,12 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
   { name: 'reload', summary: 'Reload the extension (re-reads dist/ from disk).', category: 'meta', params: empty },
   { name: 'debug_exec', summary: 'Diagnostic: probe in-page bridge availability.', category: 'meta', params: empty },
   { name: 'detach', summary: 'Detach the debugger from the target tab.', category: 'meta', params: empty },
+  {
+    name: 'set_bridge_port',
+    summary: 'Set the WebSocket bridge port (persists across reload; enables multi-session on different ports).',
+    category: 'meta',
+    params: Type.Object({ port: Type.Number() }),
+  },
 
   // --- navigation -----------------------------------------------------------
   {
@@ -274,6 +280,7 @@ const READ_ONLY = new Set([
   'get_page_context',
 ]);
 const MUTATING = new Set([
+  'set_bridge_port',
   'navigate',
   'login',
   'scroll_to',

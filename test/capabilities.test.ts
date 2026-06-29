@@ -47,6 +47,7 @@ const EXPECTED_TOOLS = [
   'label_select',
   'detach',
   'set_explain_mode',
+  'set_bridge_port',
   'annotate',
   'capabilities',
   'get_page_context',
