@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { type OverlaySpec, planOverlay } from '../src/overlays';
+import { parseHTML } from 'linkedom';
+import { type OverlaySpec, planOverlay, showOverlay } from '../src/overlays';
 
 describe('planOverlay', () => {
   it('returns null for an unknown kind', () => {
@@ -68,5 +69,32 @@ describe('planOverlay', () => {
       expect(plan.anims.length).toBeGreaterThan(0);
       expect(plan.ttlMs).toBeGreaterThanOrEqual(plan.anims[0].timing.duration);
     });
+  });
+});
+
+describe('showOverlay (DOM integration)', () => {
+  it('creates a host element with a shadow root and cleans up after ttlMs', async () => {
+    // linkedom doesn't support element.animate, so showOverlay falls back to the
+    // setTimeout cleanup path. We verify the host is created + removed.
+    const { document } = parseHTML('<!doctype html><html><head></head><body></body></html>');
+    const origDoc = globalThis.document;
+    // Temporarily patch the global document so showOverlay's createElement works.
+    (globalThis as unknown as { document: typeof document }).document = document as unknown as Document;
+    try {
+      showOverlay({ kind: 'fingerprint', x: 100, y: 200 });
+      // Host should be appended to documentElement.
+      const hosts = document.documentElement.querySelectorAll('div');
+      expect(hosts.length).toBeGreaterThanOrEqual(1);
+      const host = hosts[hosts.length - 1]!;
+      expect(host.style.cssText).toContain('position:fixed');
+      expect(host.style.cssText).toContain('left:100px');
+      expect(host.shadowRoot).not.toBeNull();
+      // Wait for the ttl cleanup (~950ms for fingerprint).
+      await new Promise(r => setTimeout(r, 1100));
+      // The host should have been removed (parentNode null).
+      expect(host.parentNode).toBeNull();
+    } finally {
+      (globalThis as unknown as { document: typeof document }).document = origDoc as unknown as typeof document;
+    }
   });
 });
