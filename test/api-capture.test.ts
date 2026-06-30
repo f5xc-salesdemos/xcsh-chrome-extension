@@ -46,4 +46,10 @@ describe('shouldFetchBody', () => {
   it('isJsonMime tolerates charset suffix', () => {
     expect(isJsonMime('application/json; charset=utf-8')).toBe(true);
   });
+  it('rejects negative encodedDataLength (CDP error sentinel)', () => {
+    expect(shouldFetchBody('application/json', -1)).toBe(false);
+  });
+  it('rejects undefined mime', () => {
+    expect(shouldFetchBody(undefined, 1024)).toBe(false);
+  });
 });

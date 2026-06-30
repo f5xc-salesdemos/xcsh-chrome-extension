@@ -8,7 +8,7 @@
  * A single-resource GET has a trailing <name>; a list ends at <type>.
  */
 
-export const API_CAPTURE_CAPS = { maxEncodedBytes: 256 * 1024 };
+export const API_CAPTURE_CAPS = { maxEncodedBytes: 256 * 1024 } as const;
 
 const RESOURCE_RE = /\/api\/config\/namespaces\/[^/]+\/([a-z0-9_]+)\/[^/?#]+/i;
 
