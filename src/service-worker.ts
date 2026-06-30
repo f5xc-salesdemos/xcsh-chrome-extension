@@ -11,6 +11,7 @@ import { buildCapabilities, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { runDispatch } from './dispatch';
+import { type BindingState, decideBinding, isConsoleUrl } from './tab-binding';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
 const DEFAULT_BRIDGE_PORT = 19222;
@@ -137,6 +138,30 @@ let observingNetwork = false;
 // Chat: panel Ports keyed by chat-turn id ("c-…"), and the latest captured XC
 // API response per tab (ground-truth for the page-context snapshot).
 const turnToPort = new Map<string, chrome.runtime.Port>();
+
+// Connected chat side-panel Ports (for broadcasting tab/connection state).
+const chatPanels = new Set<chrome.runtime.Port>();
+// Count of in-flight tool dispatches; with turnToPort.size it forms the "xcsh is
+// busy" signal that locks the controlled tab against passive rebinding.
+let inFlightCount = 0;
+// The Chrome tab-group id holding the red controlled-tab marker, if any.
+let controlledGroupId: number | undefined;
+
+function isInFlight(): boolean {
+  return inFlightCount > 0 || turnToPort.size > 0;
+}
+function bindingState(): BindingState {
+  return { controlledTabId: targetTabId, inFlight: isInFlight() };
+}
+function broadcastToChatPanels(msg: unknown): void {
+  for (const p of chatPanels) {
+    try {
+      p.postMessage(msg);
+    } catch {
+      /* port closing — onDisconnect will clean up */
+    }
+  }
+}
 type ApiCapture = RawApiCapture & { mimeType?: string };
 const latestApiCapture = new Map<number, ApiCapture>();
 // Pending request bodies we want, awaiting Network.loadingFinished.
@@ -334,6 +359,10 @@ startKeepAlive();
 // Connect immediately on the default port; then async-read any stored override.
 // (Moving connect() inside the async callback broke MV3 SW suspension timing.)
 connect();
+// Bind the active console tab on startup so the panel has context without a prior navigate.
+chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+  if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id);
+});
 chrome.storage.local.get('bridgePort', (data) => {
   if (typeof data?.bridgePort === 'number' && data.bridgePort >= 1024 && data.bridgePort !== bridgePort) {
     bridgePort = data.bridgePort;
@@ -382,6 +411,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // --- Chat side panel Port --------------------------------------------------
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'xcsh-chat') return;
+  chatPanels.add(port);
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
     if (m.type === 'chat_request') {
@@ -414,10 +444,17 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
   port.onDisconnect.addListener(() => {
+    chatPanels.delete(port);
     for (const [id, p] of turnToPort) if (p === port) turnToPort.delete(id);
   });
   // Greet with current connection status so the panel can render its dot.
   port.postMessage({ type: 'status', connected: ws?.readyState === WebSocket.OPEN });
+  // Proactively bind the active console tab when the panel opens (idle only).
+  chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+    if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url) && tab.id !== targetTabId) {
+      setControlledTab(tab.id);
+    }
+  });
 });
 
 /** Stop the agent: detach the debugger and hide the on-page indicator. */
@@ -449,6 +486,7 @@ async function runTool(tool: string, params: any): Promise<unknown> {
   const excludedFromNotice =
     tool === 'ping' || tool === 'capabilities' || tool === 'set_explain_mode' || tool === 'get_page_context';
   let ok = true;
+  inFlightCount++;
   try {
     const result = await dispatchTool(tool, params);
     return result;
@@ -456,6 +494,7 @@ async function runTool(tool: string, params: any): Promise<unknown> {
     ok = false;
     throw e;
   } finally {
+    inFlightCount--;
     if (broadcastsIndicator && targetTabId !== undefined) {
       chrome.tabs.sendMessage(targetTabId, { type: 'indicator_hide' }).catch(() => {});
     }
@@ -1341,10 +1380,44 @@ function setExplainMode(params: { enabled?: boolean }): { enabled: boolean } {
   return { enabled: explainMode };
 }
 
+/**
+ * Set (or clear) the single controlled tab: ungroup the previous tab, attach the
+ * debugger, apply the red "xcsh" tab group, and notify the panel. Passing
+ * `undefined` unbinds. The OIDC tab-reuse logic in `navigate` is unaffected — it
+ * calls this only when it deliberately changes the target.
+ */
+async function setControlledTab(tabId: number | undefined): Promise<void> {
+  const prev = targetTabId;
+  if (prev !== undefined && prev !== tabId) {
+    await chrome.tabs.ungroup([prev]).catch(() => {});
+  }
+  targetTabId = tabId;
+  if (tabId === undefined) {
+    if (controlledGroupId !== undefined) {
+      // Best-effort cleanup of the named group itself (may already be empty).
+      await chrome.tabGroups.update(controlledGroupId, { title: '' }).catch(() => {});
+      controlledGroupId = undefined;
+    }
+    broadcastToChatPanels({ type: 'tab_unbound' });
+    return;
+  }
+  await ensureDebuggerAttached(tabId).catch(() => {});
+  try {
+    const gid = await chrome.tabs.group({ tabIds: [tabId] });
+    controlledGroupId = gid;
+    await chrome.tabGroups.update(gid, { color: 'red', title: 'xcsh' });
+  } catch {
+    /* tabGroups can fail on some tab states — the binding still holds */
+  }
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab?.url, title: tab?.title });
+}
+
 /** Build the page-context snapshot for the active console tab. */
 async function buildPageContext(): Promise<unknown> {
-  const tabId = requireTab();
-  await enableNetworkObserver(); // ensure future navigations are captured
+  const tabId = targetTabId;
+  if (tabId === undefined) return null; // no controlled console tab — panel shows inactive
+  await enableNetworkObserver();
   let url = '';
   let title = '';
   try {
@@ -1352,13 +1425,13 @@ async function buildPageContext(): Promise<unknown> {
     url = tab.url ?? '';
     title = tab.title ?? '';
   } catch {
-    /* tab vanished — fall through with empties */
+    /* tab vanished */
   }
   let ax: AxLike | null = null;
   try {
     ax = (await readAxFromTab()) as unknown as AxLike;
   } catch {
-    /* page still loading — snapshot without ax */
+    /* page still loading */
   }
   const api = latestApiCapture.get(tabId) ?? null;
   return buildContextSnapshot({ tabId, url, title, capturedAt: Date.now(), ax, api });
@@ -2143,7 +2216,24 @@ chrome.debugger.onDetach.addListener((source) => {
   }
 });
 
-// Clear a tab's capture when it closes.
-chrome.tabs.onRemoved.addListener((tabId) => {
+// --- Tab binding listeners -------------------------------------------------
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  const a = decideBinding(bindingState(), { kind: 'activated', tabId, url: tab?.url });
+  if (a.action === 'bind') await setControlledTab(a.tabId);
+  else if (a.action === 'inactive') broadcastToChatPanels({ type: 'tab_inactive' });
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.url === undefined) return;
+  const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
+  if (a.action === 'unbind') await setControlledTab(undefined);
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
   latestApiCapture.delete(tabId);
+  const a = decideBinding(bindingState(), { kind: 'removed', tabId });
+  if (a.action === 'unbind') await setControlledTab(undefined);
+  broadcastToChatPanels({ type: 'tab_closed', tabId }); // panel prunes that tab's session
 });
