@@ -10,6 +10,8 @@
     "128": "icons/icon-128.png"
   },
   "options_page": "options.html",
+  "action": { "default_title": "xcsh chat" },
+  "side_panel": { "default_path": "side-panel.html" },
   "permissions": [
     "debugger",
     "scripting",
@@ -17,7 +19,8 @@
     "webNavigation",
     "activeTab",
     "storage",
-    "alarms"
+    "alarms",
+    "sidePanel"
   ],
   "host_permissions": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*", "<all_urls>"],
   "storage": {
