@@ -283,6 +283,19 @@ async function pruneTabSession(tabId: number): Promise<void> {
 // Turn lifecycle
 // ---------------------------------------------------------------------------
 
+/**
+ * If a turn is in-flight, mark it aborted and render a visible error block,
+ * then clear the active turn. Must be called BEFORE any conv or session swap so
+ * the msgId still belongs to the current conv and renderErrorBlockFor can find it.
+ */
+function abortActiveTurn(reason: string): void {
+  if (!active) return;
+  conv = markAborted(conv, active.msgId, Date.now());
+  renderErrorBlockFor(active.msgId, reason);
+  saveConversation(conv).catch(() => {});
+  endTurn();
+}
+
 function beginTurn(id: string, msgId: string): void {
   active = { id, msgId, state: initChatTurn(id) };
   sendBtn.disabled = true;
@@ -312,6 +325,7 @@ port.onMessage.addListener((m: unknown) => {
   }
 
   if (msg.type === 'tab_bound') {
+    abortActiveTurn('Tab changed — chat ended. Resend to continue.');
     boundTabId = msg.tabId as number;
     ctxChipEl.textContent = (msg.title as string) || (msg.url as string) || 'console tab';
     switchToTabSession(boundTabId).catch(() => {});
@@ -319,6 +333,7 @@ port.onMessage.addListener((m: unknown) => {
   }
 
   if (msg.type === 'tab_unbound' || msg.type === 'tab_inactive') {
+    abortActiveTurn('Tab changed — chat ended. Resend to continue.');
     boundTabId = undefined;
     ctxChipEl.textContent = 'open an F5 XC console page';
     showInactive();
@@ -326,6 +341,7 @@ port.onMessage.addListener((m: unknown) => {
   }
 
   if (msg.type === 'tab_closed') {
+    abortActiveTurn('Tab changed — chat ended. Resend to continue.');
     pruneTabSession(msg.tabId as number).catch(() => {});
     return;
   }

@@ -144,8 +144,6 @@ const chatPanels = new Set<chrome.runtime.Port>();
 // Count of in-flight tool dispatches; with turnToPort.size it forms the "xcsh is
 // busy" signal that locks the controlled tab against passive rebinding.
 let inFlightCount = 0;
-// The Chrome tab-group id holding the red controlled-tab marker, if any.
-let controlledGroupId: number | undefined;
 
 function isInFlight(): boolean {
   return inFlightCount > 0 || turnToPort.size > 0;
@@ -409,8 +407,20 @@ startHeartbeat();
 connect();
 // Bind the active console tab on startup so the panel has context without a prior navigate.
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-  if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id);
+  if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id).catch(() => {});
 });
+// Best-effort cleanup: remove any stale "xcsh" tab group left on background tabs
+// after a service-worker restart (those tabs are no longer the controlled target).
+chrome.tabGroups
+  .query({ title: 'xcsh' })
+  .then(async (groups) => {
+    for (const g of groups) {
+      const tabs = await chrome.tabs.query({ groupId: g.id }).catch(() => [] as chrome.tabs.Tab[]);
+      for (const t of tabs)
+        if (t.id !== undefined && t.id !== targetTabId) await chrome.tabs.ungroup([t.id]).catch(() => {});
+    }
+  })
+  .catch(() => {});
 chrome.storage.local.get('bridgePort', (data) => {
   if (typeof data?.bridgePort === 'number' && data.bridgePort >= 1024 && data.bridgePort !== bridgePort) {
     bridgePort = data.bridgePort;
@@ -504,7 +514,7 @@ chrome.runtime.onConnect.addListener((port) => {
   // Proactively bind the active console tab when the panel opens (idle only).
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
     if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url) && tab.id !== targetTabId) {
-      setControlledTab(tab.id);
+      setControlledTab(tab.id).catch(() => {});
     }
   });
 });
@@ -682,7 +692,7 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
 
   let tabId: number;
   if (reuseId !== undefined) {
-    targetTabId = reuseId;
+    await setControlledTab(reuseId);
     tabId = reuseId;
 
     // DEDUP: if the tab is already on the target URL, skip navigation entirely
@@ -717,7 +727,7 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     if (created.id === undefined) {
       throw new Error('navigate: failed to create console tab');
     }
-    targetTabId = created.id;
+    await setControlledTab(created.id);
     tabId = created.id;
   }
 
@@ -1435,8 +1445,8 @@ function setExplainMode(params: { enabled?: boolean }): { enabled: boolean } {
 /**
  * Set (or clear) the single controlled tab: ungroup the previous tab, attach the
  * debugger, apply the red "xcsh" tab group, and notify the panel. Passing
- * `undefined` unbinds. The OIDC tab-reuse logic in `navigate` is unaffected — it
- * calls this only when it deliberately changes the target.
+ * `undefined` unbinds. `navigate`, `login`, and `tabsCreate` all route through
+ * this function so the red group and panel session always stay in sync.
  */
 async function setControlledTab(tabId: number | undefined): Promise<void> {
   const prev = targetTabId;
@@ -1445,10 +1455,9 @@ async function setControlledTab(tabId: number | undefined): Promise<void> {
   }
   targetTabId = tabId;
   if (tabId === undefined) {
-    if (controlledGroupId !== undefined) {
-      // Best-effort cleanup of the named group itself (may already be empty).
-      await chrome.tabGroups.update(controlledGroupId, { title: '' }).catch(() => {});
-      controlledGroupId = undefined;
+    // Ungroup the previously-bound tab so no orphaned red group is left behind.
+    if (prev !== undefined) {
+      await chrome.tabs.ungroup([prev]).catch(() => {});
     }
     broadcastToChatPanels({ type: 'tab_unbound' });
     return;
@@ -1456,7 +1465,6 @@ async function setControlledTab(tabId: number | undefined): Promise<void> {
   await ensureDebuggerAttached(tabId).catch(() => {});
   try {
     const gid = await chrome.tabs.group({ tabIds: [tabId] });
-    controlledGroupId = gid;
     await chrome.tabGroups.update(gid, { color: 'red', title: 'xcsh' });
   } catch {
     /* tabGroups can fail on some tab states — the binding still holds */
@@ -2072,7 +2080,7 @@ async function tabsCreate(params: { url: string }): Promise<{ tabId: number | un
     throw new Error(`tabs_create: url blocked by managed policy: ${url}`);
   }
   const tab = await chrome.tabs.create({ url, active: true });
-  if (tab.id !== undefined) targetTabId = tab.id;
+  if (tab.id !== undefined) await setControlledTab(tab.id);
   return { tabId: tab.id };
 }
 
