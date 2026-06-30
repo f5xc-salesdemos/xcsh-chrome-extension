@@ -12,16 +12,7 @@
   "options_page": "options.html",
   "action": { "default_title": "xcsh chat" },
   "side_panel": { "default_path": "side-panel.html" },
-  "permissions": [
-    "debugger",
-    "scripting",
-    "tabs",
-    "webNavigation",
-    "activeTab",
-    "storage",
-    "alarms",
-    "sidePanel"
-  ],
+  "permissions": ["debugger", "scripting", "tabs", "webNavigation", "activeTab", "storage", "alarms", "sidePanel"],
   "host_permissions": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*", "<all_urls>"],
   "storage": {
     "managed_schema": "managed_schema.json"

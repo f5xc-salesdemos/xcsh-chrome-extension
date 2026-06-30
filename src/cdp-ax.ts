@@ -105,7 +105,11 @@ async function backendCenter(tabId: number, backendNodeId: number): Promise<{ x:
   for (const q of quads ?? []) {
     const a =
       Math.abs(
-        q[0] * q[3] - q[2] * q[1] + (q[2] * q[5] - q[4] * q[3]) + (q[4] * q[7] - q[6] * q[5]) + (q[6] * q[1] - q[0] * q[7]),
+        q[0] * q[3] -
+          q[2] * q[1] +
+          (q[2] * q[5] - q[4] * q[3]) +
+          (q[4] * q[7] - q[6] * q[5]) +
+          (q[6] * q[1] - q[0] * q[7]),
       ) / 2;
     if (a > bestArea) {
       bestArea = a;
@@ -139,7 +143,8 @@ export async function clickRef(tabId: number, ref: string): Promise<{ x: number;
     })) as { result?: { value?: string } }
   ).result?.value;
   await send(target, 'Runtime.releaseObject', { objectId }).catch(() => {});
-  if (verdict !== 'hit') throw new Error(`clickRef: ref ${ref} not hittable — point (${Math.round(x)},${Math.round(y)}) ${verdict}`);
+  if (verdict !== 'hit')
+    throw new Error(`clickRef: ref ${ref} not hittable — point (${Math.round(x)},${Math.round(y)}) ${verdict}`);
   await send(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
   await send(target, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
   await send(target, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });

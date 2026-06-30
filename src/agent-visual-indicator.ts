@@ -86,8 +86,7 @@ function createElements(): void {
   badge = document.createElement('div');
   badge.id = BADGE_ID;
   badge.title = 'Stop xcsh';
-  badge.style.cssText =
-    'position:fixed;top:8px;right:8px;z-index:2147483647;opacity:0;pointer-events:none;';
+  badge.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;opacity:0;pointer-events:none;';
   const shadow = badge.attachShadow({ mode: 'open' });
   shadow.innerHTML =
     '<style>' +

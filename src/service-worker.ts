@@ -1939,7 +1939,7 @@ async function waitForApiResponse(params: {
 
   while (Date.now() < deadline) {
     for (let i = startIdx; i < networkBuffer.length; i++) {
-      const e = networkBuffer[i] as any;
+      const e = networkBuffer[i]; // networkBuffer is any[]; no cast needed
       if (e.method !== 'Network.responseReceived') continue;
       const url = e.response?.url ?? '';
       const status = e.response?.status ?? 0;

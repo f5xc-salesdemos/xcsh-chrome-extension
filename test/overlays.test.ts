@@ -85,12 +85,13 @@ describe('showOverlay (DOM integration)', () => {
       // Host should be appended to documentElement.
       const hosts = document.documentElement.querySelectorAll('div');
       expect(hosts.length).toBeGreaterThanOrEqual(1);
-      const host = hosts[hosts.length - 1]!;
+      const host = hosts[hosts.length - 1];
+      if (!host) throw new Error('expected an overlay host to be appended');
       expect(host.style.cssText).toContain('position:fixed');
       expect(host.style.cssText).toContain('left:100px');
       expect(host.shadowRoot).not.toBeNull();
       // Wait for the ttl cleanup (~950ms for fingerprint).
-      await new Promise(r => setTimeout(r, 1100));
+      await new Promise((r) => setTimeout(r, 1100));
       // The host should have been removed (parentNode null).
       expect(host.parentNode).toBeNull();
     } finally {

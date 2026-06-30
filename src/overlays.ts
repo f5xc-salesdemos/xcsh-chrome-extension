@@ -109,8 +109,7 @@ export function planOverlay(spec: OverlaySpec): OverlayPlan | null {
     if (w <= 0 || h <= 0) return null;
     const bw = w + HIGHLIGHT_PAD * 2;
     const bh = h + HIGHLIGHT_PAD * 2;
-    const html =
-      `<div class="box" style="position:absolute;left:0;top:0;width:${bw}px;height:${bh}px;box-sizing:border-box;border:2px solid ${RED};border-radius:6px;box-shadow:0 0 0 1px rgba(202,38,10,.25),0 0 10px 2px rgba(202,38,10,.45);background:rgba(202,38,10,.06)"></div>`;
+    const html = `<div class="box" style="position:absolute;left:0;top:0;width:${bw}px;height:${bh}px;box-sizing:border-box;border:2px solid ${RED};border-radius:6px;box-shadow:0 0 0 1px rgba(202,38,10,.25),0 0 10px 2px rgba(202,38,10,.45);background:rgba(202,38,10,.06)"></div>`;
     return {
       left: x - HIGHLIGHT_PAD,
       top: y - HIGHLIGHT_PAD,
@@ -142,8 +141,7 @@ export function planOverlay(spec: OverlaySpec): OverlayPlan | null {
     // Position the callout above the target (offset up by ~40px so it doesn't
     // cover what it's pointing at). Escape HTML to avoid injection.
     const safeText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const html =
-      `<div class="callout" style="position:absolute;left:0;top:0;transform:translateX(-50%);max-width:280px;padding:8px 12px;border-radius:8px;background:#0a0d11;border:1.5px solid ${RED};box-shadow:0 3px 14px rgba(0,0,0,.5),0 0 10px rgba(202,38,10,.4);color:#e8ecf4;font:600 13px/1.4 'JetBrains Mono',ui-monospace,Menlo,monospace;white-space:pre-wrap;pointer-events:none">${safeText}</div>`;
+    const html = `<div class="callout" style="position:absolute;left:0;top:0;transform:translateX(-50%);max-width:280px;padding:8px 12px;border-radius:8px;background:#0a0d11;border:1.5px solid ${RED};box-shadow:0 3px 14px rgba(0,0,0,.5),0 0 10px rgba(202,38,10,.4);color:#e8ecf4;font:600 13px/1.4 'JetBrains Mono',ui-monospace,Menlo,monospace;white-space:pre-wrap;pointer-events:none">${safeText}</div>`;
     return {
       left: x,
       top: y - 44, // above the target
