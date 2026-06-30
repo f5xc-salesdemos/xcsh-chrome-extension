@@ -11,7 +11,7 @@ import { buildCapabilities, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { runDispatch } from './dispatch';
-import { type BindingState, decideBinding, isConsoleUrl } from './tab-binding';
+import { type BindingState, decideBinding, isConsoleUrl, isLinkStale } from './tab-binding';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
 const DEFAULT_BRIDGE_PORT = 19222;
@@ -162,6 +162,43 @@ function broadcastToChatPanels(msg: unknown): void {
     }
   }
 }
+
+// --- Bridge heartbeat / fail-loud state ------------------------------------
+let lastActivityTs = 0;
+const LINK_STALE_MS = 45_000; // > the bridge ping cadence; open-but-silent ⇒ dead
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function pushStatus(connected: boolean, reason?: string): void {
+  broadcastToChatPanels({ type: 'status', connected, reason });
+}
+
+/** Fail every active chat turn loudly when the bridge link drops. */
+function failActiveTurns(error: string): void {
+  for (const [id, port] of [...turnToPort.entries()]) {
+    try {
+      port.postMessage({ type: 'chat_error', id, error });
+    } catch {
+      /* ignore */
+    }
+    turnToPort.delete(id);
+  }
+}
+
+function startHeartbeat(): void {
+  if (heartbeatTimer) return;
+  heartbeatTimer = setInterval(() => {
+    if (ws?.readyState === WebSocket.OPEN && isLinkStale(lastActivityTs, Date.now(), LINK_STALE_MS)) {
+      pushStatus(false, 'stale');
+      failActiveTurns('bridge unresponsive');
+      try {
+        ws.close();
+      } catch {
+        /* onclose handles reconnect */
+      }
+    }
+  }, 15_000);
+}
+
 type ApiCapture = RawApiCapture & { mimeType?: string };
 const latestApiCapture = new Map<number, ApiCapture>();
 // Pending request bodies we want, awaiting Network.loadingFinished.
@@ -293,19 +330,29 @@ function scheduleFastReconnect(): void {
 function connect(): void {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   try {
-    const sock = new WebSocket(getBridgeUrl());
+    const sock = new WebSocket(getBridgeUrl()); // #114 dynamic port — keep getBridgeUrl()
     ws = sock;
-    sock.onmessage = (ev) => onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data);
+    sock.onopen = () => {
+      lastActivityTs = Date.now();
+      pushStatus(true);
+    };
+    sock.onmessage = (ev) => {
+      lastActivityTs = Date.now();
+      onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data);
+    };
     sock.onclose = () => {
       // Only clear the shared ref if this socket is still the current one, then
       // re-attach quickly so a newly-started bridge's probe finds us.
       if (ws === sock) ws = null;
+      pushStatus(false, 'closed');
+      failActiveTurns('bridge disconnected');
       scheduleFastReconnect();
     };
     sock.onerror = () => {}; // onclose follows — reconnect is handled there.
   } catch {
     // WebSocket construction failed (e.g. bridge URL unreachable at startup).
     ws = null;
+    pushStatus(false, 'error');
     scheduleFastReconnect();
   }
 }
@@ -356,6 +403,7 @@ function onMessage(msg: any): void {
 // WebSocket `onclose` schedules a reconnect if the initial connect finds no
 // bridge, so no explicit post-connect retry is needed here.
 startKeepAlive();
+startHeartbeat();
 // Connect immediately on the default port; then async-read any stored override.
 // (Moving connect() inside the async callback broke MV3 SW suspension timing.)
 connect();
@@ -415,6 +463,10 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
     if (m.type === 'chat_request') {
+      if (ws?.readyState !== WebSocket.OPEN) {
+        port.postMessage({ type: 'chat_error', id: m.id, error: 'xcsh not connected — start the xcsh CLI' });
+        return;
+      }
       turnToPort.set(m.id, port);
       // Forward to the bridge as-is — buildChatRequest in the panel already
       // produces the correct shape (type 'chat_request', omitting history_hint
