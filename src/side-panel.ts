@@ -19,7 +19,6 @@ import {
 } from './chat-protocol';
 import { renderMarkdown, renderReferenceChip } from './markdown-render';
 import {
-  addToIndex,
   appendAssistantDelta,
   appendToolNotice,
   appendUserMessage,
@@ -27,11 +26,19 @@ import {
   finalizeAssistant,
   markAborted,
   newConversation,
-  pruneConversations,
+  removeTab,
   setMode,
+  setTabConv,
   startAssistant,
+  tabConv,
 } from './references-store';
-import { deleteConversations, loadConversation, loadIndex, saveConversation, saveIndex } from './side-panel-store';
+import {
+  deleteConversations,
+  loadConversation,
+  loadTabIndex,
+  saveConversation,
+  saveTabIndex,
+} from './side-panel-store';
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -59,11 +66,16 @@ let latestContext: unknown = null;
 let contextMeta: { title?: string; path?: string } | null = null;
 let attachContext = true;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let boundTabId: number | undefined;
+let isConnected = false;
+
+const TURN_TIMEOUT_MS = 30_000;
 
 interface ActiveTurn {
   id: string;
   msgId: string;
   state: ReturnType<typeof initChatTurn>;
+  timeout?: ReturnType<typeof setTimeout>;
 }
 let active: ActiveTurn | null = null;
 
@@ -86,7 +98,25 @@ function scheduleSave(): void {
 }
 
 function setConnected(on: boolean): void {
+  isConnected = on;
   connEl.classList.toggle('on', on);
+  let banner = document.getElementById('conn-banner');
+  if (!on) {
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'conn-banner';
+      banner.className = 'conn-banner';
+      banner.textContent = 'xcsh not connected — start the xcsh CLI to continue.';
+      messagesEl.parentElement?.insertBefore(banner, messagesEl);
+    }
+  } else if (banner) {
+    banner.remove();
+  }
+}
+
+function showInactive(): void {
+  conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
+  renderAll();
 }
 
 function renderContextChip(): void {
@@ -169,6 +199,19 @@ function makeErrorNode(errorText: string): HTMLElement {
   return wrap;
 }
 
+/** Append an error block to the messages list (no data-mid). */
+function renderErrorBlock(errorText: string): void {
+  messagesEl.appendChild(makeErrorNode(errorText));
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+/** Replace an existing assistant node (by msgId) with a timeout/error block. */
+function renderErrorBlockFor(msgId: string, errorText: string): void {
+  const existingNode = messagesEl.querySelector(`[data-mid="${msgId}"]`);
+  if (existingNode) existingNode.remove();
+  renderErrorBlock(errorText);
+}
+
 function appendRefChips(wrap: HTMLElement, refIds: string[]): void {
   if (!refIds.length) return;
   const chips = document.createElement('div');
@@ -214,6 +257,29 @@ function updateAssistantBody(msgId: string, text: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Per-tab session helpers
+// ---------------------------------------------------------------------------
+
+async function switchToTabSession(tabId: number): Promise<void> {
+  const idx = await loadTabIndex();
+  const convId = tabConv(idx, tabId);
+  const existing = convId ? await loadConversation(convId) : null;
+  conv = existing ?? newConversation(`conv-${crypto.randomUUID()}`, Date.now());
+  if (!existing) {
+    await saveTabIndex(setTabConv(idx, tabId, conv.id));
+    await saveConversation(conv);
+  }
+  renderAll();
+}
+
+async function pruneTabSession(tabId: number): Promise<void> {
+  const idx = await loadTabIndex();
+  const { index, removedConv } = removeTab(idx, tabId);
+  await saveTabIndex(index);
+  if (removedConv) await deleteConversations([removedConv]);
+}
+
+// ---------------------------------------------------------------------------
 // Turn lifecycle
 // ---------------------------------------------------------------------------
 
@@ -224,6 +290,9 @@ function beginTurn(id: string, msgId: string): void {
 }
 
 function endTurn(): void {
+  if (active?.timeout) {
+    clearTimeout(active.timeout);
+  }
   active = null;
   sendBtn.disabled = false;
   stopBtn.style.display = 'none';
@@ -239,6 +308,25 @@ port.onMessage.addListener((m: unknown) => {
 
   if (msg.type === 'status') {
     setConnected(!!msg.connected);
+    return;
+  }
+
+  if (msg.type === 'tab_bound') {
+    boundTabId = msg.tabId as number;
+    ctxChipEl.textContent = (msg.title as string) || (msg.url as string) || 'console tab';
+    switchToTabSession(boundTabId).catch(() => {});
+    return;
+  }
+
+  if (msg.type === 'tab_unbound' || msg.type === 'tab_inactive') {
+    boundTabId = undefined;
+    ctxChipEl.textContent = 'open an F5 XC console page';
+    showInactive();
+    return;
+  }
+
+  if (msg.type === 'tab_closed') {
+    pruneTabSession(msg.tabId as number).catch(() => {});
     return;
   }
 
@@ -258,6 +346,12 @@ port.onMessage.addListener((m: unknown) => {
 function onChatEvent(ev: ChatInbound): void {
   // Late inbound for a finished/aborted turn — ignore
   if (!active || active.id !== ev.id) return;
+
+  // First inbound for this turn — clear the timeout
+  if (active.timeout) {
+    clearTimeout(active.timeout);
+    active.timeout = undefined;
+  }
 
   if (ev.type === 'chat_tool_notice') {
     const toolMsg = ev as ChatToolNoticeMsg;
@@ -312,6 +406,17 @@ function onChatEvent(ev: ChatInbound): void {
 async function sendMessage(): Promise<void> {
   const text = inputEl.value.trim();
   if (!text || active) return;
+
+  if (!isConnected) {
+    conv = appendUserMessage(conv, { id: crypto.randomUUID(), role: 'user', text, at: Date.now() });
+    renderAll();
+    renderErrorBlock('xcsh not connected — start the xcsh CLI, then resend.');
+    await saveConversation(conv);
+    inputEl.value = '';
+    autosize();
+    return;
+  }
+
   inputEl.value = '';
   autosize();
 
@@ -332,6 +437,18 @@ async function sendMessage(): Promise<void> {
 
   const turnId = `c-${crypto.randomUUID()}`;
   beginTurn(turnId, asstMsgId);
+  // active is guaranteed non-null immediately after beginTurn
+  // biome-ignore lint/style/noNonNullAssertion: beginTurn always sets active
+  const turn = active!;
+
+  turn.timeout = setTimeout(() => {
+    if (active && active.id === turnId) {
+      conv = markAborted(conv, active.msgId, Date.now());
+      renderErrorBlockFor(active.msgId, 'No response from xcsh (timed out). Resend to try again.');
+      saveConversation(conv).catch(() => {});
+      endTurn();
+    }
+  }, TURN_TIMEOUT_MS);
 
   port.postMessage(buildChatRequest(turnId, text, attachContext ? latestContext : null, mode, conv.id));
 }
@@ -401,26 +518,16 @@ stopBtn.addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Boot: rehydrate + request initial status and page context
+// Boot: show inactive state; session is set by first tab_bound from the SW
 // ---------------------------------------------------------------------------
 
 (async () => {
-  const index = await loadIndex();
-  const existing = index.active ? await loadConversation(index.active) : null;
-
-  if (existing) {
-    conv = existing;
-  } else {
-    conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
-    const pruned = pruneConversations(addToIndex(index, conv.id));
-    await saveIndex(pruned.index);
-    await deleteConversations(pruned.removed);
-    await saveConversation(conv);
-  }
+  // Start with a blank placeholder conversation (shown as inactive until tab binds)
+  conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
 
   populateModeSelector(conv.mode);
   renderAll();
-  renderContextChip();
+  ctxChipEl.textContent = 'open an F5 XC console page';
 
   port.postMessage({ type: 'status_request' });
   port.postMessage({ type: 'get_page_context' });
