@@ -27,6 +27,27 @@ describe('redactSecrets', () => {
     const out = redactSecrets({ token: 'x', nested: { password: 'p', api_key: 'k', ok: 1 } });
     expect(out).toEqual({ token: '[redacted]', nested: { password: '[redacted]', api_key: '[redacted]', ok: 1 } });
   });
+
+  it('redacts OAuth/OIDC suffix keys', () => {
+    const out = redactSecrets({
+      access_token: 'at',
+      refresh_token: 'rt',
+      id_token: 'it',
+      client_secret: 'cs',
+      bearer: 'b',
+      credentials: 'c',
+      namespace: 'default',
+    });
+    expect(out).toEqual({
+      access_token: '[redacted]',
+      refresh_token: '[redacted]',
+      id_token: '[redacted]',
+      client_secret: '[redacted]',
+      bearer: '[redacted]',
+      credentials: '[redacted]',
+      namespace: 'default',
+    });
+  });
 });
 
 describe('buildContextSnapshot', () => {

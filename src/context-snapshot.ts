@@ -65,7 +65,7 @@ export const SNAPSHOT_CAPS = {
   axNodes: 400,
 };
 
-const SECRET_KEY = /^(token|password|secret|authorization|cookie)$|_key$/i;
+const SECRET_KEY = /^(token|password|secret|authorization|cookie|bearer|credentials)$|(_key|_token|_secret)$/i;
 
 export function redactSecrets<T>(value: T): T {
   if (Array.isArray(value)) return value.map((v) => redactSecrets(v)) as unknown as T;
@@ -112,7 +112,7 @@ function trimAx(node: AxLike, caps: typeof SNAPSHOT_CAPS): { ax: AxLike; truncat
   return { ax: walk(node, 0), truncated };
 }
 
-/** Shallow-keep top-level keys + metadata/spec when a body busts its budget. */
+/** Shallow-keep top-level keys + metadata/spec when a body busts its budget. Assumes body has already been redacted by redactSecrets(). */
 function trimApiBody(body: unknown, maxBytes: number): { body: unknown; truncated: boolean } {
   if (bytes(body) <= maxBytes) return { body, truncated: false };
   if (body && typeof body === 'object' && !Array.isArray(body)) {
