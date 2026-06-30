@@ -7,8 +7,7 @@
  *   xcsh.chat.conv.<id>    → Conversation
  */
 
-import type { ChatIndex, Conversation, TabIndex } from './references-store';
-import { emptyTabIndex } from './references-store';
+import { type ChatIndex, type Conversation, emptyTabIndex, type TabIndex } from './references-store';
 
 export const INDEX_KEY = 'xcsh.chat.index';
 export function convKey(id: string): string {
