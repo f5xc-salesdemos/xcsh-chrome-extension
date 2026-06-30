@@ -13,12 +13,41 @@ import {
 // switch), plus the new `capabilities` discovery tool. The descriptor MUST cover
 // exactly these — no more, no less.
 const EXPECTED_TOOLS = [
-  'ping', 'reload', 'debug_exec', 'navigate', 'login', 'select_option', 'scroll_to',
-  'get_page_text', 'javascript_tool', 'tabs_list', 'tabs_create', 'tabs_close',
-  'resize_window', 'read_console', 'read_network', 'wait_for_api_response', 'file_upload',
-  'browser_batch', 'read_ax', 'wait_for', 'assert_text', 'find', 'click', 'click_element',
-  'click_xy', 'type_text', 'screenshot', 'form_input', 'key_press', 'label_select', 'detach',
-  'set_explain_mode', 'annotate', 'capabilities',
+  'ping',
+  'reload',
+  'debug_exec',
+  'navigate',
+  'login',
+  'select_option',
+  'scroll_to',
+  'get_page_text',
+  'javascript_tool',
+  'tabs_list',
+  'tabs_create',
+  'tabs_close',
+  'resize_window',
+  'read_console',
+  'read_network',
+  'wait_for_api_response',
+  'file_upload',
+  'browser_batch',
+  'read_ax',
+  'wait_for',
+  'assert_text',
+  'find',
+  'click',
+  'click_element',
+  'click_xy',
+  'type_text',
+  'screenshot',
+  'form_input',
+  'key_press',
+  'label_select',
+  'detach',
+  'set_explain_mode',
+  'annotate',
+  'capabilities',
+  'get_page_context',
 ];
 
 describe('capabilities — tool descriptors', () => {
@@ -78,6 +107,10 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
+  it('CONTRACT_VERSION is 1.2.0 (chat contract with modes + stop/notice)', () => {
+    expect(CONTRACT_VERSION).toBe('1.2.0');
+  });
+
   it('every FEATURE points at a tool that exists', () => {
     expect(getToolDef(FEATURES.explainMode.tool)).toBeDefined();
     expect(getToolDef(FEATURES.overlays.tool)).toBeDefined();
@@ -94,6 +127,33 @@ describe('capabilities — features & manifest', () => {
     expect(getToolDef('annotate')?.flags?.requiresExplainMode).toBe(true);
     expect(getToolDef('read_ax')?.flags?.readOnly).toBe(true);
     expect(getToolDef('click')?.flags?.mutates).toBe(true);
+  });
+
+  it('publishes get_page_context as a read-only tool', () => {
+    const def = getToolDef('get_page_context');
+    expect(def).toBeDefined();
+    expect(def?.category).toBe('read');
+    expect(def?.flags?.readOnly).toBe(true);
+  });
+
+  it('advertises the chat feature with its protocol messages and modes', () => {
+    const cap = buildCapabilities('0.1.0');
+    const chat = (cap.features as Record<string, unknown>).chat as {
+      modes?: readonly string[];
+      messages?: readonly string[];
+    };
+    expect(chat).toBeDefined();
+    expect(chat?.modes).toEqual(['educational', 'presentation', 'configuration', 'screenshot', 'annotation']);
+    expect(chat?.messages).toEqual([
+      'chat_request',
+      'chat_delta',
+      'chat_done',
+      'chat_error',
+      'chat_stop',
+      'chat_tool_notice',
+    ]);
+    expect(chat?.messages).toContain('chat_stop');
+    expect(chat?.messages).toContain('chat_tool_notice');
   });
 
   it('buildCapabilities assembles the runtime manifest', () => {

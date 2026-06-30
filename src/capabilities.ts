@@ -19,7 +19,7 @@ import { type TSchema, Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 
 /** Bumped on any change to the tool/feature contract so xcsh can detect drift. */
-export const CONTRACT_VERSION = '1.0.0';
+export const CONTRACT_VERSION = '1.2.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
@@ -203,6 +203,12 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
     category: 'read',
     params: Type.Object({ pattern: Type.Optional(Type.String()), timeout_ms: Type.Optional(Type.Number()) }),
   },
+  {
+    name: 'get_page_context',
+    summary: 'Return a snapshot of the active console page (url, AX tree, captured XC API body) for chat grounding.',
+    category: 'read',
+    params: empty,
+  },
 
   // --- script ---------------------------------------------------------------
   {
@@ -245,13 +251,40 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
 // Semantic flags, classified centrally (auditable in one place) rather than
 // scattered across every literal.
 const READ_ONLY = new Set([
-  'ping', 'capabilities', 'debug_exec', 'read_ax', 'get_page_text', 'find', 'wait_for',
-  'assert_text', 'screenshot', 'read_console', 'read_network', 'wait_for_api_response',
+  'ping',
+  'capabilities',
+  'debug_exec',
+  'read_ax',
+  'get_page_text',
+  'find',
+  'wait_for',
+  'assert_text',
+  'screenshot',
+  'read_console',
+  'read_network',
+  'wait_for_api_response',
+  'get_page_context',
 ]);
 const MUTATING = new Set([
-  'navigate', 'login', 'scroll_to', 'resize_window', 'tabs_create', 'tabs_close', 'click',
-  'click_element', 'click_xy', 'type_text', 'form_input', 'key_press', 'select_option',
-  'label_select', 'file_upload', 'javascript_tool', 'browser_batch', 'reload', 'detach',
+  'navigate',
+  'login',
+  'scroll_to',
+  'resize_window',
+  'tabs_create',
+  'tabs_close',
+  'click',
+  'click_element',
+  'click_xy',
+  'type_text',
+  'form_input',
+  'key_press',
+  'select_option',
+  'label_select',
+  'file_upload',
+  'javascript_tool',
+  'browser_batch',
+  'reload',
+  'detach',
 ]);
 const EXPLAIN_GATED = new Set(['annotate']);
 
@@ -290,6 +323,14 @@ export const FEATURES = {
     tool: 'resize_window',
     description: 'Control the browser window size.',
   },
+  chat: {
+    tool: 'get_page_context',
+    transport: 'websocket-bridge',
+    modes: ['educational', 'presentation', 'configuration', 'screenshot', 'annotation'] as const,
+    messages: ['chat_request', 'chat_delta', 'chat_done', 'chat_error', 'chat_stop', 'chat_tool_notice'] as const,
+    description:
+      'User ↔ xcsh chat over the bridge. The extension side panel sends chat_request (with mode and page-context snapshot); xcsh streams chat_delta tokens then a terminal chat_done (with reference links) or chat_error. Chat ids are prefixed "c-". Tool calls during a turn use the normal tool_request flow. chat_stop halts a streaming response; chat_tool_notice signals tool availability.',
+  },
 } as const;
 
 export interface CapabilityManifest {
@@ -302,7 +343,13 @@ export interface CapabilityManifest {
 
 /** Assemble the runtime capability manifest (served by the `capabilities` tool). */
 export function buildCapabilities(version: string): CapabilityManifest {
-  return { version, contractVersion: CONTRACT_VERSION, protocol: 'tool_request/result', tools: TOOLS, features: FEATURES };
+  return {
+    version,
+    contractVersion: CONTRACT_VERSION,
+    protocol: 'tool_request/result',
+    tools: TOOLS,
+    features: FEATURES,
+  };
 }
 
 const BY_NAME = new Map<string, ToolDef>(TOOLS.map((t) => [t.name, t]));
