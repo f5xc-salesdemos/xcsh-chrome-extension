@@ -1,6 +1,6 @@
 {
   "version": "0.1.0",
-  "contractVersion": "1.3.0",
+  "contractVersion": "1.4.0",
   "protocol": "tool_request/result",
   "tools": [
     {
@@ -58,6 +58,23 @@
       "params": {
         "type": "object",
         "properties": {}
+      },
+      "flags": {
+        "mutates": true
+      }
+    },
+    {
+      "name": "set_bridge_port",
+      "summary": "Set the WebSocket bridge port (persists across reload; enables multi-session on different ports).",
+      "category": "meta",
+      "params": {
+        "type": "object",
+        "required": ["port"],
+        "properties": {
+          "port": {
+            "type": "number"
+          }
+        }
       },
       "flags": {
         "mutates": true
@@ -383,6 +400,23 @@
       "params": {
         "type": "object",
         "properties": {}
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
+      "name": "query_dom",
+      "summary": "Direct DOM.querySelector at wire speed — bypasses Runtime.evaluate for simple CSS selectors.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "required": ["selector"],
+        "properties": {
+          "selector": {
+            "type": "string"
+          }
+        }
       },
       "flags": {
         "readOnly": true

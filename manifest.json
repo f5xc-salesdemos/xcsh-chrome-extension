@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "xcsh",
-  "description": "xcsh — AI-driven automation for the F5 Distributed Cloud console.",
+  "description": "xcsh \u2014 AI-driven automation for the F5 Distributed Cloud console.",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
   "icons": {
@@ -23,17 +23,28 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*"],
-      "js": ["accessibility-tree.js"],
+      "matches": [
+        "https://*.volterra.us/*",
+        "https://*.console.ves.volterra.io/*"
+      ],
+      "js": [
+        "accessibility-tree.js"
+      ],
       "all_frames": true,
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*"],
-      "js": ["agent-visual-indicator.js"],
+      "matches": [
+        "https://*.volterra.us/*",
+        "https://*.console.ves.volterra.io/*"
+      ],
+      "js": [
+        "agent-visual-indicator.js"
+      ],
       "all_frames": false,
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxH7u98l7G7pMnn1ktkrlgl7QwA526u0p9Ry7wGBB5YMJYKWFXUivBLTvs4saWi94RSWDNamf0yrmynu/xvxcl+HVZpWZ4dgmmLKywh9ZX0cv0nXt7I02xp3jck3PEyZBS/KnSwG7xTpJJaKm3ho57W/SVvNssLidzoByLRU/HzO9l+z3g6sfmBiJmW+GLejyFYTo2AwtexkLfNEhEBa1M/P75Ffm9IEiyty3n08yGc37YSWmSSGm+TV3hgWuKMYMa+pbKw0FsA2gYuJ6WzSIeCLhx0/Uo/wk+TB62ZLPs1it4lQYv8caUB0WzKquoH/57h0NKME7y/nvAolkf70C4wIDAQAB"
 }

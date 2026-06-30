@@ -20,7 +20,7 @@ import { Value } from '@sinclair/typebox/value';
 import { INTERACTION_MODES } from './chat-protocol';
 
 /** Bumped on any change to the tool/feature contract so xcsh can detect drift. */
-export const CONTRACT_VERSION = '1.3.0';
+export const CONTRACT_VERSION = '1.4.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
@@ -55,6 +55,12 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
   { name: 'reload', summary: 'Reload the extension (re-reads dist/ from disk).', category: 'meta', params: empty },
   { name: 'debug_exec', summary: 'Diagnostic: probe in-page bridge availability.', category: 'meta', params: empty },
   { name: 'detach', summary: 'Detach the debugger from the target tab.', category: 'meta', params: empty },
+  {
+    name: 'set_bridge_port',
+    summary: 'Set the WebSocket bridge port (persists across reload; enables multi-session on different ports).',
+    category: 'meta',
+    params: Type.Object({ port: Type.Number() }),
+  },
 
   // --- navigation -----------------------------------------------------------
   {
@@ -160,6 +166,12 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
   { name: 'read_ax', summary: 'Read the accessibility tree of the page.', category: 'read', params: empty },
   { name: 'get_page_text', summary: 'Return the page text.', category: 'read', params: empty },
   {
+    name: 'query_dom',
+    summary: 'Direct DOM.querySelector at wire speed — bypasses Runtime.evaluate for simple CSS selectors.',
+    category: 'read',
+    params: Type.Object({ selector: Type.String() }),
+  },
+  {
     name: 'find',
     summary: 'Find AX nodes matching a locator.',
     category: 'read',
@@ -257,6 +269,7 @@ const READ_ONLY = new Set([
   'debug_exec',
   'read_ax',
   'get_page_text',
+  'query_dom',
   'find',
   'wait_for',
   'assert_text',
@@ -267,6 +280,7 @@ const READ_ONLY = new Set([
   'get_page_context',
 ]);
 const MUTATING = new Set([
+  'set_bridge_port',
   'navigate',
   'login',
   'scroll_to',

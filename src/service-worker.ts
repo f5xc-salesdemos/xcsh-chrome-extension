@@ -13,7 +13,13 @@ import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context
 import { runDispatch } from './dispatch';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
-const BRIDGE_URL = 'ws://127.0.0.1:19222';
+const DEFAULT_BRIDGE_PORT = 19222;
+/** Dynamic bridge port — settable via `set_bridge_port` tool or chrome.storage.local. */
+let bridgePort = DEFAULT_BRIDGE_PORT;
+
+function getBridgeUrl(): string {
+  return `ws://127.0.0.1:${bridgePort}`;
+}
 const MANAGED_POLICY_ALARM = 'managed-policy-refresh';
 const VERSION = '0.1.0';
 const NAV_TIMEOUT_MS = 30_000;
@@ -262,7 +268,7 @@ function scheduleFastReconnect(): void {
 function connect(): void {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   try {
-    const sock = new WebSocket(BRIDGE_URL);
+    const sock = new WebSocket(getBridgeUrl());
     ws = sock;
     sock.onmessage = (ev) => onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data);
     sock.onclose = () => {
@@ -325,7 +331,15 @@ function onMessage(msg: any): void {
 // WebSocket `onclose` schedules a reconnect if the initial connect finds no
 // bridge, so no explicit post-connect retry is needed here.
 startKeepAlive();
+// Connect immediately on the default port; then async-read any stored override.
+// (Moving connect() inside the async callback broke MV3 SW suspension timing.)
 connect();
+chrome.storage.local.get('bridgePort', (data) => {
+  if (typeof data?.bridgePort === 'number' && data.bridgePort >= 1024 && data.bridgePort !== bridgePort) {
+    bridgePort = data.bridgePort;
+    if (ws) ws.close(); // reconnect on the stored port
+  }
+});
 // Open the side panel when the toolbar icon is clicked (requires an `action`
 // with no default_popup in the manifest). Must run at top level — the SW restarts.
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
@@ -464,6 +478,15 @@ async function runTool(tool: string, params: any): Promise<unknown> {
 const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>> = {
   ping: () => ({ ok: true, version: VERSION }),
   capabilities: () => buildCapabilities(VERSION),
+  set_bridge_port: (params: { port: number }) => {
+    const p = params.port;
+    if (!Number.isFinite(p) || p < 1024 || p > 65535) throw new Error('port must be 1024–65535');
+    bridgePort = p;
+    chrome.storage.local.set({ bridgePort: p });
+    // Close and reconnect on the new port.
+    if (ws) ws.close();
+    return { port: p, reconnecting: true };
+  },
   reload: () => {
     // Reload the extension (re-reads dist/ from disk); the SW restarts and the
     // WebSocket reconnects via connect() on startup.
@@ -491,6 +514,7 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
   file_upload: fileUpload,
   browser_batch: browserBatch,
   read_ax: readAx,
+  query_dom: queryDom,
   wait_for: waitFor,
   assert_text: assertText,
   find,
@@ -1217,6 +1241,48 @@ async function assertText(params: {
     throw new Error(`assert failed: "${expected}" not in "${text.slice(0, 200)}"`);
   }
   return { asserted: true, text: text.slice(0, 200) };
+}
+
+async function queryDom(params: {
+  selector: string;
+}): Promise<{ found: boolean; nodeId?: number; text?: string; tag?: string }> {
+  const tabId = requireTab();
+  await ensureDebuggerAttached(tabId);
+  try {
+    const doc = (await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', { depth: 0 })) as {
+      root?: { nodeId?: number };
+    };
+    const rootId = doc?.root?.nodeId;
+    if (!rootId) return { found: false };
+    const result = (await chrome.debugger.sendCommand({ tabId }, 'DOM.querySelector', {
+      nodeId: rootId,
+      selector: params.selector,
+    })) as { nodeId?: number };
+    if (!result?.nodeId || result.nodeId === 0) return { found: false };
+    const desc = (await chrome.debugger.sendCommand({ tabId }, 'DOM.describeNode', {
+      nodeId: result.nodeId,
+    })) as { node?: { nodeName?: string; localName?: string } };
+    let text = '';
+    try {
+      const html = (await chrome.debugger.sendCommand({ tabId }, 'DOM.getOuterHTML', {
+        nodeId: result.nodeId,
+      })) as { outerHTML?: string };
+      text = (html?.outerHTML ?? '')
+        .replace(/<[^>]*>/g, '')
+        .trim()
+        .slice(0, 50);
+    } catch {
+      /* text extraction is best-effort */
+    }
+    return {
+      found: true,
+      nodeId: result.nodeId,
+      tag: desc?.node?.nodeName ?? desc?.node?.localName ?? 'unknown',
+      text,
+    };
+  } catch {
+    return { found: false };
+  }
 }
 
 async function find(params: {

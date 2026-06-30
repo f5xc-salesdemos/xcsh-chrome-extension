@@ -33,6 +33,7 @@ const EXPECTED_TOOLS = [
   'file_upload',
   'browser_batch',
   'read_ax',
+  'query_dom',
   'wait_for',
   'assert_text',
   'find',
@@ -46,6 +47,7 @@ const EXPECTED_TOOLS = [
   'label_select',
   'detach',
   'set_explain_mode',
+  'set_bridge_port',
   'annotate',
   'capabilities',
   'get_page_context',
@@ -108,8 +110,8 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
-  it('CONTRACT_VERSION is 1.3.0 (chat contract + agent prompt hints)', () => {
-    expect(CONTRACT_VERSION).toBe('1.3.0');
+  it('CONTRACT_VERSION is 1.4.0 (chat contract + prompt hints + query_dom/set_bridge_port)', () => {
+    expect(CONTRACT_VERSION).toBe('1.4.0');
   });
 
   it('publishes agent-behavior promptHints sourced from INTERACTION_MODES', () => {
