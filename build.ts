@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { CAPABILITIES_PATH, render as renderCapabilities } from './scripts/gen-capabilities';
+import { CONFORMANCE_PATH, renderConformance } from './scripts/gen-conformance';
 
 await Bun.build({
   entrypoints: ['src/accessibility-tree.ts'],
@@ -56,6 +57,10 @@ for (const s of [16, 48, 128]) {
 // Regenerate the published capability contract from the single-source descriptor
 // (src/capabilities.ts) so capabilities.json never drifts from the code.
 fs.writeFileSync(CAPABILITIES_PATH, renderCapabilities());
+
+// Regenerate the cross-repo chat-protocol conformance artifact (schemas + golden
+// examples) from src/chat-schema.ts so xcsh can vendor + validate against it.
+fs.writeFileSync(CONFORMANCE_PATH, renderConformance());
 
 console.log('built dist/');
 

@@ -1,0 +1,595 @@
+{
+  "contractVersion": "1.2.0",
+  "schemas": {
+    "chat_request": {
+      "type": "object",
+      "required": ["type", "id", "text", "context", "mode"],
+      "properties": {
+        "type": {
+          "const": "chat_request",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": ["v", "capturedAt", "tabId", "url", "path", "title", "ax", "api", "truncated"],
+              "properties": {
+                "v": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "capturedAt": {
+                  "type": "number"
+                },
+                "tabId": {
+                  "type": "number"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "ax": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "required": ["role"],
+                      "properties": {
+                        "role": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "api": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "required": ["url", "status", "resourceType", "body", "truncated"],
+                      "properties": {
+                        "url": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "number"
+                        },
+                        "resourceType": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "body": {},
+                        "truncated": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "const": "educational",
+              "type": "string"
+            },
+            {
+              "const": "presentation",
+              "type": "string"
+            },
+            {
+              "const": "configuration",
+              "type": "string"
+            },
+            {
+              "const": "screenshot",
+              "type": "string"
+            },
+            {
+              "const": "annotation",
+              "type": "string"
+            }
+          ]
+        },
+        "history_hint": {
+          "type": "string"
+        }
+      }
+    },
+    "chat_stop": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "const": "chat_stop",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        }
+      }
+    },
+    "chat_delta": {
+      "type": "object",
+      "required": ["type", "id", "seq", "delta"],
+      "properties": {
+        "type": {
+          "const": "chat_delta",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "delta": {
+          "type": "string"
+        }
+      }
+    },
+    "chat_done": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "const": "chat_done",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "title", "url"],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "chat_error": {
+      "type": "object",
+      "required": ["type", "id", "error"],
+      "properties": {
+        "type": {
+          "const": "chat_error",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "chat_tool_notice": {
+      "type": "object",
+      "required": ["type", "id", "tool", "ok"],
+      "properties": {
+        "type": {
+          "const": "chat_tool_notice",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    },
+    "page_context_snapshot": {
+      "type": "object",
+      "required": ["v", "capturedAt", "tabId", "url", "path", "title", "ax", "api", "truncated"],
+      "properties": {
+        "v": {
+          "const": 1,
+          "type": "number"
+        },
+        "capturedAt": {
+          "type": "number"
+        },
+        "tabId": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "ax": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "additionalProperties": true,
+              "type": "object",
+              "required": ["role"],
+              "properties": {
+                "role": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "api": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": ["url", "status", "resourceType", "body", "truncated"],
+              "properties": {
+                "url": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "number"
+                },
+                "resourceType": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "body": {},
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "examples": {
+    "valid": {
+      "page_context_snapshot": {
+        "v": 1,
+        "capturedAt": 1719000000000,
+        "tabId": 7,
+        "url": "https://acme.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1",
+        "path": "/web/namespaces/default/http_loadbalancers/lb1",
+        "title": "lb1 — Distributed Cloud",
+        "ax": {
+          "role": "WebArea",
+          "name": "lb1",
+          "children": [
+            {
+              "role": "button",
+              "name": "Edit",
+              "ref": "e12"
+            }
+          ]
+        },
+        "api": {
+          "url": "/api/config/namespaces/default/http_loadbalancers/lb1",
+          "status": 200,
+          "resourceType": "http_loadbalancers",
+          "body": {
+            "metadata": {
+              "name": "lb1"
+            },
+            "spec": {
+              "domains": ["lb1.example.com"]
+            }
+          },
+          "truncated": false
+        },
+        "truncated": false
+      },
+      "chat_request": {
+        "type": "chat_request",
+        "id": "c-1111",
+        "text": "What does this load balancer do?",
+        "context": {
+          "v": 1,
+          "capturedAt": 1719000000000,
+          "tabId": 7,
+          "url": "https://acme.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1",
+          "path": "/web/namespaces/default/http_loadbalancers/lb1",
+          "title": "lb1 — Distributed Cloud",
+          "ax": {
+            "role": "WebArea",
+            "name": "lb1",
+            "children": [
+              {
+                "role": "button",
+                "name": "Edit",
+                "ref": "e12"
+              }
+            ]
+          },
+          "api": {
+            "url": "/api/config/namespaces/default/http_loadbalancers/lb1",
+            "status": 200,
+            "resourceType": "http_loadbalancers",
+            "body": {
+              "metadata": {
+                "name": "lb1"
+              },
+              "spec": {
+                "domains": ["lb1.example.com"]
+              }
+            },
+            "truncated": false
+          },
+          "truncated": false
+        },
+        "mode": "educational",
+        "history_hint": "conv-1"
+      },
+      "chat_request_no_context": {
+        "type": "chat_request",
+        "id": "c-2222",
+        "text": "help me build a WAF policy",
+        "context": null,
+        "mode": "configuration"
+      },
+      "chat_stop": {
+        "type": "chat_stop",
+        "id": "c-1111"
+      },
+      "chat_delta": {
+        "type": "chat_delta",
+        "id": "c-1111",
+        "seq": 0,
+        "delta": "This LB "
+      },
+      "chat_delta_1": {
+        "type": "chat_delta",
+        "id": "c-1111",
+        "seq": 1,
+        "delta": "routes traffic."
+      },
+      "chat_done": {
+        "type": "chat_done",
+        "id": "c-1111",
+        "references": [
+          {
+            "kind": "doc",
+            "title": "HTTP LB",
+            "url": "https://docs.cloud.f5.com/docs/how-to"
+          }
+        ]
+      },
+      "chat_done_no_refs": {
+        "type": "chat_done",
+        "id": "c-1111"
+      },
+      "chat_error": {
+        "type": "chat_error",
+        "id": "c-1111",
+        "error": "HTTP 403 forbidden"
+      },
+      "chat_tool_notice": {
+        "type": "chat_tool_notice",
+        "id": "c-1111",
+        "tool": "navigate",
+        "ok": true
+      }
+    },
+    "invalid": [
+      {
+        "schema": "chat_request",
+        "why": "id missing c- prefix",
+        "value": {
+          "type": "chat_request",
+          "id": "x-1111",
+          "text": "What does this load balancer do?",
+          "context": {
+            "v": 1,
+            "capturedAt": 1719000000000,
+            "tabId": 7,
+            "url": "https://acme.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1",
+            "path": "/web/namespaces/default/http_loadbalancers/lb1",
+            "title": "lb1 — Distributed Cloud",
+            "ax": {
+              "role": "WebArea",
+              "name": "lb1",
+              "children": [
+                {
+                  "role": "button",
+                  "name": "Edit",
+                  "ref": "e12"
+                }
+              ]
+            },
+            "api": {
+              "url": "/api/config/namespaces/default/http_loadbalancers/lb1",
+              "status": 200,
+              "resourceType": "http_loadbalancers",
+              "body": {
+                "metadata": {
+                  "name": "lb1"
+                },
+                "spec": {
+                  "domains": ["lb1.example.com"]
+                }
+              },
+              "truncated": false
+            },
+            "truncated": false
+          },
+          "mode": "educational",
+          "history_hint": "conv-1"
+        }
+      },
+      {
+        "schema": "chat_request",
+        "why": "unknown mode",
+        "value": {
+          "type": "chat_request",
+          "id": "c-1111",
+          "text": "What does this load balancer do?",
+          "context": {
+            "v": 1,
+            "capturedAt": 1719000000000,
+            "tabId": 7,
+            "url": "https://acme.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1",
+            "path": "/web/namespaces/default/http_loadbalancers/lb1",
+            "title": "lb1 — Distributed Cloud",
+            "ax": {
+              "role": "WebArea",
+              "name": "lb1",
+              "children": [
+                {
+                  "role": "button",
+                  "name": "Edit",
+                  "ref": "e12"
+                }
+              ]
+            },
+            "api": {
+              "url": "/api/config/namespaces/default/http_loadbalancers/lb1",
+              "status": 200,
+              "resourceType": "http_loadbalancers",
+              "body": {
+                "metadata": {
+                  "name": "lb1"
+                },
+                "spec": {
+                  "domains": ["lb1.example.com"]
+                }
+              },
+              "truncated": false
+            },
+            "truncated": false
+          },
+          "mode": "wizard",
+          "history_hint": "conv-1"
+        }
+      },
+      {
+        "schema": "chat_request",
+        "why": "missing text",
+        "value": {
+          "type": "chat_request",
+          "id": "c-1",
+          "context": null,
+          "mode": "educational"
+        }
+      },
+      {
+        "schema": "chat_delta",
+        "why": "missing seq",
+        "value": {
+          "type": "chat_delta",
+          "id": "c-1",
+          "delta": "x"
+        }
+      },
+      {
+        "schema": "page_context_snapshot",
+        "why": "wrong version",
+        "value": {
+          "v": 2,
+          "capturedAt": 1719000000000,
+          "tabId": 7,
+          "url": "https://acme.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1",
+          "path": "/web/namespaces/default/http_loadbalancers/lb1",
+          "title": "lb1 — Distributed Cloud",
+          "ax": {
+            "role": "WebArea",
+            "name": "lb1",
+            "children": [
+              {
+                "role": "button",
+                "name": "Edit",
+                "ref": "e12"
+              }
+            ]
+          },
+          "api": {
+            "url": "/api/config/namespaces/default/http_loadbalancers/lb1",
+            "status": 200,
+            "resourceType": "http_loadbalancers",
+            "body": {
+              "metadata": {
+                "name": "lb1"
+              },
+              "spec": {
+                "domains": ["lb1.example.com"]
+              }
+            },
+            "truncated": false
+          },
+          "truncated": false
+        }
+      }
+    ]
+  }
+}
