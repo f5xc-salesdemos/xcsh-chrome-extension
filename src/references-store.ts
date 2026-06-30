@@ -153,3 +153,29 @@ export function markAborted(conv: Conversation, msgId: string, at: number): Conv
     updatedAt: at,
   };
 }
+
+/** Map of live tab id → conversation id, for per-tab chat sessions. */
+export interface TabIndex {
+  byTab: Record<string, string>;
+}
+
+export function emptyTabIndex(): TabIndex {
+  return { byTab: {} };
+}
+
+export function setTabConv(index: TabIndex, tabId: number, convId: string): TabIndex {
+  return { byTab: { ...index.byTab, [String(tabId)]: convId } };
+}
+
+export function tabConv(index: TabIndex, tabId: number): string | undefined {
+  return index.byTab[String(tabId)];
+}
+
+export function removeTab(index: TabIndex, tabId: number): { index: TabIndex; removedConv: string | undefined } {
+  const key = String(tabId);
+  const removedConv = index.byTab[key];
+  if (removedConv === undefined) return { index, removedConv: undefined };
+  const byTab = { ...index.byTab };
+  delete byTab[key];
+  return { index: { byTab }, removedConv };
+}

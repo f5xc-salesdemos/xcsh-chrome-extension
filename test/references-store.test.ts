@@ -8,12 +8,16 @@ import {
   type ChatIndex,
   CONV_CAP,
   deriveTitle,
+  emptyTabIndex,
   finalizeAssistant,
   markAborted,
   newConversation,
   pruneConversations,
+  removeTab,
   setMode,
+  setTabConv,
   startAssistant,
+  tabConv,
 } from '../src/references-store';
 
 describe('conversation lifecycle', () => {
@@ -114,5 +118,22 @@ describe('interaction modes and tool entries (addendum)', () => {
     expect(c.messages[0].aborted).toBeUndefined();
     expect(c.messages[1].aborted).toBe(true);
     expect(c.messages[2].aborted).toBeUndefined();
+  });
+});
+
+describe('TabIndex (per-tab session map)', () => {
+  it('maps a tab id to a conversation id immutably', () => {
+    const a = emptyTabIndex();
+    const b = setTabConv(a, 7, 'conv-7');
+    expect(tabConv(b, 7)).toBe('conv-7');
+    expect(tabConv(a, 7)).toBeUndefined(); // original unchanged
+  });
+  it('removes a tab and returns the conversation it pointed at', () => {
+    const idx = setTabConv(setTabConv(emptyTabIndex(), 7, 'conv-7'), 8, 'conv-8');
+    const { index, removedConv } = removeTab(idx, 7);
+    expect(removedConv).toBe('conv-7');
+    expect(tabConv(index, 7)).toBeUndefined();
+    expect(tabConv(index, 8)).toBe('conv-8');
+    expect(removeTab(index, 99).removedConv).toBeUndefined();
   });
 });
