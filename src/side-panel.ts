@@ -185,7 +185,7 @@ function appendRefChips(wrap: HTMLElement, refIds: string[]): void {
 // ---------------------------------------------------------------------------
 
 function renderAll(): void {
-  messagesEl.innerHTML = '';
+  messagesEl.replaceChildren();
   for (const m of conv.messages) {
     let node: HTMLElement;
     if (m.role === 'user') {
@@ -203,7 +203,8 @@ function renderAll(): void {
 }
 
 function renderRefs(): void {
-  refsListEl.innerHTML = conv.references.map((r) => renderReferenceChip(r)).join('');
+  refsListEl.replaceChildren();
+  for (const r of conv.references) refsListEl.insertAdjacentHTML('beforeend', renderReferenceChip(r));
 }
 
 function updateAssistantBody(msgId: string, text: string): void {
@@ -296,7 +297,7 @@ function onChatEvent(ev: ChatInbound): void {
     // Replace the streaming assistant node with a styled error block
     const existingNode = messagesEl.querySelector(`[data-mid="${active.msgId}"]`);
     if (existingNode) existingNode.remove();
-    const errorNode = makeErrorNode(active.state.error ?? streamMsg.error);
+    const errorNode = makeErrorNode(active.state.error ?? streamMsg.error ?? 'Unknown error');
     messagesEl.appendChild(errorNode);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     saveConversation(conv).catch(() => {});
@@ -346,7 +347,7 @@ function autosize(): void {
 
 function populateModeSelector(currentMode: InteractionMode): void {
   // Remove options built into the HTML and replace with protocol-sourced ones
-  modeEl.innerHTML = '';
+  modeEl.replaceChildren();
   for (const m of INTERACTION_MODES) {
     const opt = document.createElement('option');
     opt.value = m.id;
