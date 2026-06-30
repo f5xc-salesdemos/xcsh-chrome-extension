@@ -12,7 +12,17 @@
   "options_page": "options.html",
   "action": { "default_title": "xcsh chat" },
   "side_panel": { "default_path": "side-panel.html" },
-  "permissions": ["debugger", "scripting", "tabs", "webNavigation", "activeTab", "storage", "alarms", "sidePanel", "tabGroups"],
+  "permissions": [
+    "debugger",
+    "scripting",
+    "tabs",
+    "webNavigation",
+    "activeTab",
+    "storage",
+    "alarms",
+    "sidePanel",
+    "tabGroups"
+  ],
   "host_permissions": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*", "<all_urls>"],
   "storage": {
     "managed_schema": "managed_schema.json"
@@ -23,25 +33,15 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://*.volterra.us/*",
-        "https://*.console.ves.volterra.io/*"
-      ],
-      "js": [
-        "accessibility-tree.js"
-      ],
+      "matches": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*"],
+      "js": ["accessibility-tree.js"],
       "all_frames": true,
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": [
-        "https://*.volterra.us/*",
-        "https://*.console.ves.volterra.io/*"
-      ],
-      "js": [
-        "agent-visual-indicator.js"
-      ],
+      "matches": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*"],
+      "js": ["agent-visual-indicator.js"],
       "all_frames": false,
       "run_at": "document_idle"
     }

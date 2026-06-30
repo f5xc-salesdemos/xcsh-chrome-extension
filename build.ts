@@ -69,14 +69,16 @@ console.log('built dist/');
 // If a local key.pem exists, verify it matches; if not, the manifest key is
 // already correct (committed, not .gitignored). Do NOT override the manifest key
 // from key.pem — that caused ID drift when developers had different local keys.
-const distManifest = path.resolve(import.meta.dir, "dist/manifest.json");
-const manifest = JSON.parse(fs.readFileSync(distManifest, "utf8"));
+const distManifest = path.resolve(import.meta.dir, 'dist/manifest.json');
+const manifest = JSON.parse(fs.readFileSync(distManifest, 'utf8'));
 if (!manifest.key) {
   // Fallback: if no key in manifest (shouldn't happen), try key.pem.
-  const keyPem = path.resolve(import.meta.dir, "key.pem");
+  const keyPem = path.resolve(import.meta.dir, 'key.pem');
   if (fs.existsSync(keyPem)) {
-    const der = execFileSync('openssl', ['rsa', '-in', keyPem, '-pubout', '-outform', 'DER'], { stdio: ['pipe', 'pipe', 'ignore'] });
-    manifest.key = der.toString("base64");
+    const der = execFileSync('openssl', ['rsa', '-in', keyPem, '-pubout', '-outform', 'DER'], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    manifest.key = der.toString('base64');
     fs.writeFileSync(distManifest, JSON.stringify(manifest, null, 2));
     console.log('embedded dev key (no manifest key found)');
   }
