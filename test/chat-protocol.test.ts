@@ -1,19 +1,41 @@
 import { describe, expect, it } from 'bun:test';
-import { buildChatRequest, type ChatInbound, initChatTurn, isChatInbound, reduceChatTurn } from '../src/chat-protocol';
+import {
+  buildChatRequest,
+  buildChatStop,
+  type ChatStreamMsg,
+  initChatTurn,
+  isChatInbound,
+  reduceChatTurn,
+} from '../src/chat-protocol';
 
 describe('buildChatRequest', () => {
-  it('shapes a chat_request with passthrough context', () => {
-    const m = buildChatRequest('c-1', 'hi', { url: 'x' }, 'conv-1');
-    expect(m).toEqual({ type: 'chat_request', id: 'c-1', text: 'hi', context: { url: 'x' }, history_hint: 'conv-1' });
+  it('shapes a chat_request with passthrough context and mode', () => {
+    const m = buildChatRequest('c-1', 'hi', { url: 'x' }, 'educational', 'conv-1');
+    expect(m).toEqual({
+      type: 'chat_request',
+      id: 'c-1',
+      text: 'hi',
+      context: { url: 'x' },
+      mode: 'educational',
+      history_hint: 'conv-1',
+    });
   });
   it('omits history_hint when not given', () => {
-    const m = buildChatRequest('c-1', 'hi', null);
+    const m = buildChatRequest('c-1', 'hi', null, 'presentation');
     expect('history_hint' in m).toBe(false);
+    expect(m.mode).toBe('presentation');
+  });
+});
+
+describe('buildChatStop', () => {
+  it('shapes a chat_stop message', () => {
+    const m = buildChatStop('c-1');
+    expect(m).toEqual({ type: 'chat_stop', id: 'c-1' });
   });
 });
 
 describe('reduceChatTurn', () => {
-  const feed = (msgs: ChatInbound[]) => msgs.reduce(reduceChatTurn, initChatTurn('c-1'));
+  const feed = (msgs: ChatStreamMsg[]) => msgs.reduce(reduceChatTurn, initChatTurn('c-1'));
 
   it('accumulates ordered deltas', () => {
     const s = feed([
@@ -71,10 +93,11 @@ describe('reduceChatTurn', () => {
 });
 
 describe('isChatInbound', () => {
-  it('accepts chat_* and rejects others', () => {
+  it('accepts chat_delta, chat_done, chat_error, and chat_tool_notice', () => {
     expect(isChatInbound({ type: 'chat_delta', id: 'c', seq: 0, delta: '' })).toBe(true);
     expect(isChatInbound({ type: 'chat_done', id: 'c' })).toBe(true);
     expect(isChatInbound({ type: 'chat_error', id: 'c', error: 'x' })).toBe(true);
+    expect(isChatInbound({ type: 'chat_tool_notice', id: 'c', tool: 'grep', ok: true })).toBe(true);
     expect(isChatInbound({ type: 'tool_result', id: '1' })).toBe(false);
     expect(isChatInbound(null)).toBe(false);
   });
