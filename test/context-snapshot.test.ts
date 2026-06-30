@@ -100,3 +100,31 @@ describe('snapshotMetadata', () => {
     expect(typeof m.apiBytes).toBe('number');
   });
 });
+
+describe('sanitizeUrl (M2 security: strip query/hash from snapshot url)', () => {
+  it('strips query string and hash — no access_token leaks', () => {
+    const rawUrl =
+      'https://x.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1?access_token=eyABC&state=xyz#frag';
+    const s = buildContextSnapshot(
+      base({
+        url: rawUrl,
+        title: 'test',
+      }),
+    );
+    // url field must contain NO query or hash
+    expect(s.url).toBe('https://x.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1');
+    expect(s.url).not.toContain('access_token');
+    expect(s.url).not.toContain('?');
+    expect(s.url).not.toContain('#');
+    // path field is already pathname-only and must remain so
+    expect(s.path).toBe('/web/namespaces/default/http_loadbalancers/lb1');
+  });
+
+  it('handles a url that new URL() cannot parse — strips from first ?/#', () => {
+    const s = buildContextSnapshot(base({ url: 'not-a-url?token=secret#frag' }));
+    expect(s.url).not.toContain('token');
+    expect(s.url).not.toContain('?');
+    expect(s.url).not.toContain('#');
+    expect(s.path).toBe('');
+  });
+});

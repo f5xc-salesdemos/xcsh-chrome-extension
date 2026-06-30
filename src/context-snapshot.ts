@@ -134,6 +134,25 @@ function pathOf(url: string): string {
   }
 }
 
+/**
+ * Return only origin + pathname of `raw`, dropping any query string and hash.
+ * This prevents tokens that appear in OIDC redirect URLs (e.g. ?access_token=…)
+ * from being forwarded to the bridge inside a page-context snapshot.
+ * Falls back to stripping from the first `?` or `#` when `new URL` fails.
+ */
+export function sanitizeUrl(raw: string): string {
+  try {
+    const { origin, pathname } = new URL(raw);
+    return origin + pathname;
+  } catch {
+    // Strip from whichever delimiter appears first
+    const q = raw.indexOf('?');
+    const h = raw.indexOf('#');
+    const cut = q === -1 ? h : h === -1 ? q : Math.min(q, h);
+    return cut === -1 ? raw : raw.slice(0, cut);
+  }
+}
+
 export function buildContextSnapshot(
   inputs: SnapshotInputs,
   caps: typeof SNAPSHOT_CAPS = SNAPSHOT_CAPS,
@@ -168,7 +187,7 @@ export function buildContextSnapshot(
     v: 1,
     capturedAt: inputs.capturedAt,
     tabId: inputs.tabId,
-    url: inputs.url,
+    url: sanitizeUrl(inputs.url),
     path: pathOf(inputs.url),
     title: inputs.title,
     ax,

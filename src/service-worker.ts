@@ -313,7 +313,10 @@ function onMessage(msg: any): void {
   if (isChatInbound(msg)) {
     const port = turnToPort.get(msg.id);
     port?.postMessage(msg);
-    if (msg.type !== 'chat_delta') turnToPort.delete(msg.id);
+    // Only delete on genuinely terminal messages — chat_tool_notice is
+    // non-terminal (more deltas/done/error follow), so deleting there would
+    // orphan the turn and drop all subsequent messages.
+    if (msg.type === 'chat_done' || msg.type === 'chat_error') turnToPort.delete(msg.id);
     return;
   }
 }
@@ -367,17 +370,12 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'xcsh-chat') return;
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
-    if (m.type === 'chat_send') {
+    if (m.type === 'chat_request') {
       turnToPort.set(m.id, port);
-      // Forward to the bridge as a chat_request (context already attached by the panel).
-      send({
-        type: 'chat_request',
-        id: m.id,
-        text: m.text,
-        context: m.context,
-        mode: m.mode,
-        history_hint: m.history_hint,
-      });
+      // Forward to the bridge as-is — buildChatRequest in the panel already
+      // produces the correct shape (type 'chat_request', omitting history_hint
+      // when absent). No reconstruction needed.
+      send(m);
       return;
     }
     if (m.type === 'chat_stop') {

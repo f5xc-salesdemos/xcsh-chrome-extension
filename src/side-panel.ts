@@ -2,7 +2,7 @@
  * Side panel controller — the chat UI. Owns only DOM + Port I/O; all shaping is
  * delegated to the pure modules (chat-protocol, references-store, markdown-render)
  * and persistence to side-panel-store. One long-lived Port ("xcsh-chat") to the
- * SW carries chat_send out and streamed chat_delta/done/error back.
+ * SW carries chat_request out and streamed chat_delta/done/error back.
  */
 
 import {
