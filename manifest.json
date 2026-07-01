@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "xcsh",
-  "description": "xcsh \u2014 AI-driven automation for the F5 Distributed Cloud console.",
+  "description": "xcsh - Agentic Browsing for the F5 Distributed Cloud Console",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
   "icons": {
