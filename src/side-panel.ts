@@ -142,7 +142,16 @@ function makeAssistantNode(msgId: string, text: string): HTMLElement {
 
   const body = document.createElement('div');
   body.className = 'body';
-  body.innerHTML = renderMarkdown(text);
+  if (text) {
+    body.innerHTML = renderMarkdown(text);
+  } else {
+    // Thinking indicator — shown while waiting for the first chat_delta.
+    // Replaced by real content in updateAssistantBody() on first delta.
+    const thinking = document.createElement('div');
+    thinking.className = 'thinking';
+    thinking.textContent = '● ● ● thinking';
+    body.appendChild(thinking);
+  }
 
   const copyBtn = document.createElement('button');
   copyBtn.className = 'copy-btn';
