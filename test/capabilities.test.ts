@@ -30,6 +30,7 @@ const EXPECTED_TOOLS = [
   'read_console',
   'read_network',
   'diag_suspension',
+  'diag_bridges',
   'capture_login_flow',
   'wait_for_api_response',
   'file_upload',
@@ -112,8 +113,8 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
-  it('CONTRACT_VERSION is 1.4.0 (chat contract + prompt hints + query_dom/set_bridge_port)', () => {
-    expect(CONTRACT_VERSION).toBe('1.4.0');
+  it('CONTRACT_VERSION is 1.5.0 (multiPortDiscovery + diag_bridges)', () => {
+    expect(CONTRACT_VERSION).toBe('1.5.0');
   });
 
   it('publishes agent-behavior promptHints sourced from INTERACTION_MODES', () => {

@@ -51,3 +51,19 @@ async function renderDiag(): Promise<void> {
 
 document.getElementById('diag-refresh')?.addEventListener('click', () => void renderDiag());
 void renderDiag();
+
+// --- Phase 3: discovered bridges table ------------------------------------
+interface BridgeRow { port: number; tenant: string | null; env: string | null; sessionId: string | null; lastSeen: number }
+async function renderBridges(): Promise<void> {
+  const bridgesEl = document.getElementById('bridges');
+  if (!bridgesEl) return;
+  const resp = await new Promise<{ bridges?: BridgeRow[] } | undefined>((res) =>
+    chrome.runtime.sendMessage({ type: 'bridges_request' }, (r) => res(chrome.runtime.lastError ? undefined : r)),
+  );
+  const rows = resp?.bridges ?? [];
+  bridgesEl.textContent = rows.length
+    ? rows.map((b) => `:${b.port}  ${b.tenant ?? '—'}·${b.env ?? '—'}  ${b.sessionId ?? ''}`).join('\n')
+    : '(none)';
+}
+void renderBridges();
+document.getElementById('diag-refresh')?.addEventListener('click', () => void renderBridges());

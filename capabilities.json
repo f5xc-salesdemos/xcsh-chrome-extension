@@ -1,6 +1,7 @@
 {
   "version": "0.1.0",
-  "contractVersion": "1.4.0",
+  "contractVersion": "1.5.0",
+  "multiPortDiscovery": true,
   "protocol": "tool_request/result",
   "tools": [
     {
@@ -532,6 +533,16 @@
     {
       "name": "diag_suspension",
       "summary": "Diagnostic: SW-lifecycle event buffer + suspension summary (Phase 0a).",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {}
+    },
+    {
+      "name": "diag_bridges",
+      "summary": "List discovered xcsh bridges (port, tenant, env, sessionId, lastSeen) for multi-session diagnostics.",
       "category": "read",
       "params": {
         "type": "object",

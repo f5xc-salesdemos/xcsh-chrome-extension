@@ -75,6 +75,12 @@ let boundSessionKey: string | null = null;
  * and the SW's page_context must not repaint a stale tenant chip. */
 let panelInactive = false;
 let isConnected = false;
+let liveTenants = new Set<string>();
+let inputBlocked = false;
+function setInputEnabled(on: boolean): void {
+  inputBlocked = !on;
+  sendBtn.disabled = !on;
+}
 
 const TURN_TIMEOUT_MS = 30_000;
 
@@ -342,12 +348,22 @@ async function gateToActiveTab(tabId?: number): Promise<void> {
   const sessEl = document.getElementById('sess');
   // The gate is the SINGLE authority for the panel's display when idle.
   if (keyStr && key) {
-    // Active tab is a tenant console. Show its session (swap only if it changed).
+    if (!liveTenants.has(keyStr)) {
+      // Valid tenant tab but no xcsh process for it — guide, never route elsewhere.
+      panelInactive = true;
+      boundTabId = tab?.id;
+      boundSessionKey = null;
+      ctxChipEl.textContent = `No xcsh running for ${key.tenant}·${key.env} — start it in that context`;
+      if (sessEl) sessEl.textContent = `${key.tenant}·${key.env}`;
+      setInputEnabled(false);
+      conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
+      renderAll();
+      return;
+    }
     panelInactive = false;
+    setInputEnabled(true);
     boundTabId = tab?.id;
     ctxChipEl.textContent = tab?.title || tab?.url || 'console tab';
-    // The header label reflects the ACTIVE tab's tenant (the panel's scope) —
-    // NOT the xcsh-process tenant (that's the connection-dot tooltip).
     if (sessEl) sessEl.textContent = `${key.tenant}·${key.env}`;
     if (keyStr !== boundSessionKey) await switchToTenantSession(keyStr);
   } else {
@@ -358,6 +374,7 @@ async function gateToActiveTab(tabId?: number): Promise<void> {
     boundSessionKey = null;
     ctxChipEl.textContent = 'open an F5 XC console page';
     if (sessEl) sessEl.textContent = '';
+    setInputEnabled(true);
     conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
     renderAll();
   }
@@ -400,7 +417,7 @@ function endTurn(): void {
     clearTimeout(active.timeout);
   }
   active = null;
-  sendBtn.disabled = false;
+  sendBtn.disabled = inputBlocked;
   stopBtn.style.display = 'none';
 }
 
@@ -426,6 +443,12 @@ port.onMessage.addListener((m: unknown) => {
     const t = msg.tenant as string | null;
     const e = msg.env as string | null;
     connEl.title = t ? `xcsh session: ${t}${e ? ` (${e})` : ''}` : 'xcsh session: no active context';
+    return;
+  }
+
+  if (msg.type === 'bridges') {
+    liveTenants = new Set((msg.tenants as string[]) ?? []);
+    void gateToActiveTab(); // re-evaluate the focused tab against the new set
     return;
   }
 
@@ -534,6 +557,10 @@ function onChatEvent(ev: ChatInbound): void {
 // ---------------------------------------------------------------------------
 
 async function sendMessage(): Promise<void> {
+  if (inputBlocked) {
+    renderErrorBlock('No xcsh running for this tenant — start the xcsh CLI in that context, then resend.');
+    return;
+  }
   const text = inputEl.value.trim();
   if (!text || active) return;
 

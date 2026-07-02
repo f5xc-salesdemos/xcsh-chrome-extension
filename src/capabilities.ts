@@ -20,7 +20,7 @@ import { Value } from '@sinclair/typebox/value';
 import { INTERACTION_MODES } from './chat-protocol';
 
 /** Bumped on any change to the tool/feature contract so xcsh can detect drift. */
-export const CONTRACT_VERSION = '1.4.0';
+export const CONTRACT_VERSION = '1.5.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
@@ -217,6 +217,12 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
     params: empty,
   },
   {
+    name: 'diag_bridges',
+    summary: 'List discovered xcsh bridges (port, tenant, env, sessionId, lastSeen) for multi-session diagnostics.',
+    category: 'read',
+    params: empty,
+  },
+  {
     name: 'capture_login_flow',
     summary: 'Diagnostic: captured login redirect chain annotated with tenant/env (Phase 0b).',
     category: 'read',
@@ -381,6 +387,7 @@ export const FEATURES = {
 export interface CapabilityManifest {
   readonly version: string;
   readonly contractVersion: string;
+  readonly multiPortDiscovery: true;
   readonly protocol: 'tool_request/result';
   readonly tools: readonly ToolDef[];
   readonly features: typeof FEATURES;
@@ -391,6 +398,7 @@ export function buildCapabilities(version: string): CapabilityManifest {
   return {
     version,
     contractVersion: CONTRACT_VERSION,
+    multiPortDiscovery: true,
     protocol: 'tool_request/result',
     tools: TOOLS,
     features: FEATURES,
