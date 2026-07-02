@@ -7,7 +7,14 @@
  */
 
 import { isJsonMime, isXcResourceApi, resourceTypeFromUrl, shouldFetchBody } from './api-capture';
-import { type BridgeInfo, type BridgeRegistry, liveTenants, portCandidates, portForTenant, stalePorts } from './bridge-discovery';
+import {
+  type BridgeInfo,
+  type BridgeRegistry,
+  liveTenants,
+  portCandidates,
+  portForTenant,
+  stalePorts,
+} from './bridge-discovery';
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
@@ -186,7 +193,7 @@ function recordDiag(event: string, detail: Record<string, unknown> = {}): void {
 // between the previous last event and this sw_start reveals the suspension window.
 chrome.storage.local
   .get(DIAG_KEY)
-  .then(r => {
+  .then((r) => {
     const prior = (r?.[DIAG_KEY] as DiagEvent[] | undefined) ?? [];
     diagBuffer = prior.slice(-DIAG_CAP);
     recordDiag('sw_start', {});
@@ -275,7 +282,13 @@ function startHeartbeat(): void {
     if (isLinkStale(lastActivityTs, Date.now(), LINK_STALE_MS)) {
       pushStatus(false, 'stale');
       failActiveTurns('bridge unresponsive');
-      for (const s of sockets.values()) { try { s.close(); } catch { /* onclose reconnects */ } }
+      for (const s of sockets.values()) {
+        try {
+          s.close();
+        } catch {
+          /* onclose reconnects */
+        }
+      }
     }
   }, 15_000);
 }
@@ -426,7 +439,11 @@ function scanRange(): void {
   const now = Date.now();
   for (const port of stalePorts(registry, now, BRIDGE_STALE_MS)) {
     const s = sockets.get(port);
-    try { s?.close(); } catch { /* onclose cleans up */ }
+    try {
+      s?.close();
+    } catch {
+      /* onclose cleans up */
+    }
     sockets.delete(port);
     registry.delete(port);
   }
@@ -531,9 +548,14 @@ function onMessage(msg: any, sourcePort: number): void {
   // Identity handshake reply — record which tenant this bridge (port) serves.
   if (msg.type === 'hello_ack' || msg.type === 'tenant_changed') {
     if (typeof msg.sessionId !== 'string') return; // not a real xcsh hello_ack
-    if (typeof msg.contractVersion === 'string' && msg.contractVersion.split('.')[0] !== CONTRACT_VERSION.split('.')[0]) {
+    if (
+      typeof msg.contractVersion === 'string' &&
+      msg.contractVersion.split('.')[0] !== CONTRACT_VERSION.split('.')[0]
+    ) {
       // Major mismatch — close and forget this socket rather than trust it.
-      try { sockets.get(sourcePort)?.close(); } catch {}
+      try {
+        sockets.get(sourcePort)?.close();
+      } catch {}
       sockets.delete(sourcePort);
       registry.delete(sourcePort);
       knownPorts.delete(sourcePort); // incompatible bridge: don't fast-reconnect (avoids ~1.5s storm)
@@ -606,7 +628,13 @@ chrome.storage.local.get('bridgePort', (data) => {
   if (typeof data?.bridgePort === 'number' && data.bridgePort >= 1024 && data.bridgePort !== bridgePort) {
     bridgePort = data.bridgePort;
     manualPortPinned = true;
-    for (const [p, s] of sockets) { if (p !== bridgePort) { try { s.close(); } catch {} } }
+    for (const [p, s] of sockets) {
+      if (p !== bridgePort) {
+        try {
+          s.close();
+        } catch {}
+      }
+    }
     connectPort(bridgePort);
   }
 });
@@ -644,7 +672,10 @@ chrome.storage.onChanged.addListener((_changes, areaName) => {
 chrome.alarms.create(MANAGED_POLICY_ALARM, { periodInMinutes: 5 });
 chrome.alarms.create(BRIDGE_SCAN_ALARM, { periodInMinutes: 0.5 }); // ~30s
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === BRIDGE_SCAN_ALARM) { scanRange(); return; }
+  if (alarm.name === BRIDGE_SCAN_ALARM) {
+    scanRange();
+    return;
+  }
   if (alarm.name === MANAGED_POLICY_ALARM) {
     refreshManagedPolicy();
   }
@@ -694,7 +725,11 @@ chrome.runtime.onConnect.addListener((port) => {
     if (m.type === 'chat_request') {
       const target = activePort;
       if (target === undefined || sockets.get(target)?.readyState !== WebSocket.OPEN) {
-        port.postMessage({ type: 'chat_error', id: m.id, error: 'No xcsh running for this tenant — start the xcsh CLI in that context' });
+        port.postMessage({
+          type: 'chat_error',
+          id: m.id,
+          error: 'No xcsh running for this tenant — start the xcsh CLI in that context',
+        });
         return;
       }
       turnToPort.set(m.id, port);
@@ -723,7 +758,11 @@ chrome.runtime.onConnect.addListener((port) => {
   });
   port.onDisconnect.addListener(() => {
     chatPanels.delete(port);
-    for (const [id, p] of turnToPort) if (p === port) { turnToPort.delete(id); turnToBridgePort.delete(id); }
+    for (const [id, p] of turnToPort)
+      if (p === port) {
+        turnToPort.delete(id);
+        turnToBridgePort.delete(id);
+      }
   });
   // Greet with current connection status so the panel can render its dot.
   port.postMessage({ type: 'status', connected: anyOpen() });
@@ -807,7 +846,9 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
     chrome.storage.local.set({ bridgePort: p });
     for (const [pt, s] of sockets) {
       if (pt !== p) {
-        try { s.close(); } catch {}
+        try {
+          s.close();
+        } catch {}
         sockets.delete(pt);
         registry.delete(pt);
       }

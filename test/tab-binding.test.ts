@@ -141,14 +141,18 @@ describe('sessionKeyFromUrl', () => {
     expect(s).not.toEqual(p);
   });
   it('maps a tenant-realm Keycloak login to that tenant (provisional; refined by 0b)', () => {
-    expect(sessionKeyFromUrl('https://login.ves.volterra.io/auth/realms/acme-abc123/protocol/openid-connect/auth')).toEqual({
+    expect(
+      sessionKeyFromUrl('https://login.ves.volterra.io/auth/realms/acme-abc123/protocol/openid-connect/auth'),
+    ).toEqual({
       tenant: 'acme',
       env: 'production',
     });
   });
   it('fails closed on the shared SaaS console and shared realm', () => {
     expect(sessionKeyFromUrl('https://console.ves.volterra.io/web/devportal/domain')).toBeNull();
-    expect(sessionKeyFromUrl('https://login.ves.volterra.io/auth/realms/volterra/protocol/openid-connect/auth')).toBeNull();
+    expect(
+      sessionKeyFromUrl('https://login.ves.volterra.io/auth/realms/volterra/protocol/openid-connect/auth'),
+    ).toBeNull();
   });
   it('fails closed on non-console hosts, IPs, bare volterra hosts, and junk', () => {
     expect(sessionKeyFromUrl('https://example.com/')).toBeNull();

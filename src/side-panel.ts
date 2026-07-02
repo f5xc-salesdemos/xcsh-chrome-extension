@@ -32,12 +32,7 @@ import {
   startAssistant,
   tenantConv,
 } from './references-store';
-import {
-  loadConversation,
-  loadSessionIndex,
-  saveConversation,
-  saveSessionIndex,
-} from './side-panel-store';
+import { loadConversation, loadSessionIndex, saveConversation, saveSessionIndex } from './side-panel-store';
 import { sessionKeyFromUrl, sessionKeyStr } from './tab-binding';
 
 // ---------------------------------------------------------------------------

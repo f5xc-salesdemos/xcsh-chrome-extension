@@ -56,7 +56,10 @@ describe('extractRedirects', () => {
       {
         method: 'Network.requestWillBeSent',
         request: { url: 'https://acme.console.ves.volterra.io/web/home' },
-        redirectResponse: { url: 'https://login.ves.volterra.io/auth/realms/acme-x1/protocol/openid-connect/auth', status: 302 },
+        redirectResponse: {
+          url: 'https://login.ves.volterra.io/auth/realms/acme-x1/protocol/openid-connect/auth',
+          status: 302,
+        },
       },
     ];
     const hops = extractRedirects(events, sessionKeyFromUrl);

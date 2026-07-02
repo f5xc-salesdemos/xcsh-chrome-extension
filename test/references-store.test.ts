@@ -8,12 +8,12 @@ import {
   type ChatIndex,
   CONV_CAP,
   deriveTitle,
+  emptySessionIndex,
   emptyTabIndex,
   finalizeAssistant,
   markAborted,
   newConversation,
   pruneConversations,
-  emptySessionIndex,
   removeTab,
   removeTabSession,
   sessionIndexFromTabIndex,
@@ -146,7 +146,12 @@ describe('SessionIndex (per-tenant session map)', () => {
     expect(tenantConv(idx, 'globex|staging')).toBe('conv-g-stg');
   });
   it('removing a tab keeps the tenant conversation (many-tabs -> one-session)', () => {
-    let idx = setTenantConv(setTenantConv(emptySessionIndex(), 'acme|staging', 10, 'conv-a'), 'acme|staging', 11, 'conv-a');
+    let idx = setTenantConv(
+      setTenantConv(emptySessionIndex(), 'acme|staging', 10, 'conv-a'),
+      'acme|staging',
+      11,
+      'conv-a',
+    );
     idx = removeTabSession(idx, 10);
     expect(tabSessionKey(idx, 10)).toBeUndefined();
     expect(tabSessionKey(idx, 11)).toBe('acme|staging');

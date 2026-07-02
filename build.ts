@@ -42,6 +42,18 @@ await Bun.build({
 });
 
 fs.copyFileSync('manifest.json', 'dist/manifest.json');
+// The Chrome Web Store assigns the extension ID, so the PUBLISHED dist must not
+// contain a `key`. We keep `key` in source (and local dev builds) to pin the
+// unpacked extension's ID for the loopback origin check, but strip it from CI/
+// production builds so the CWS dist-check passes and the store can assign the ID.
+if (process.env.CI) {
+  const manifestPath = 'dist/manifest.json';
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if ('key' in manifest) {
+    delete manifest.key;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+}
 fs.copyFileSync('managed_schema.json', 'dist/managed_schema.json');
 fs.copyFileSync('src/options.html', 'dist/options.html');
 fs.copyFileSync('src/side-panel.html', 'dist/side-panel.html');

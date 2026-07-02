@@ -41,7 +41,7 @@ async function renderDiag(): Promise<void> {
   summaryEl.textContent = `restarts ${s.restarts} · suspends ${s.suspends} · max tick gap ${(s.maxTickGapMs / 1000).toFixed(1)}s · missed binds ${s.missedBinds}`;
   const t0 = events.length ? events[0].t : 0;
   eventsEl.textContent = events
-    .map(e => {
+    .map((e) => {
       const { t, event, ...rest } = e;
       const rel = `+${((t - t0) / 1000).toFixed(1)}s`.padStart(9);
       return `${rel}  ${event.padEnd(16)} ${JSON.stringify(rest)}`;
@@ -53,7 +53,13 @@ document.getElementById('diag-refresh')?.addEventListener('click', () => void re
 void renderDiag();
 
 // --- Phase 3: discovered bridges table ------------------------------------
-interface BridgeRow { port: number; tenant: string | null; env: string | null; sessionId: string | null; lastSeen: number }
+interface BridgeRow {
+  port: number;
+  tenant: string | null;
+  env: string | null;
+  sessionId: string | null;
+  lastSeen: number;
+}
 async function renderBridges(): Promise<void> {
   const bridgesEl = document.getElementById('bridges');
   if (!bridgesEl) return;

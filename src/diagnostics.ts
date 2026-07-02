@@ -52,13 +52,11 @@ export interface SuspensionSummary {
 
 /** Summarize a diagnostics buffer into the numbers we care about for Phase 0a. */
 export function summarizeSuspension(events: DiagEvent[]): SuspensionSummary {
-  const tickTimes = events.filter(e => e.event === 'keepalive').map(e => e.t);
-  const missedBinds = events.filter(
-    e => e.event === 'would_bind' && e.wsState !== 'open',
-  ).length;
+  const tickTimes = events.filter((e) => e.event === 'keepalive').map((e) => e.t);
+  const missedBinds = events.filter((e) => e.event === 'would_bind' && e.wsState !== 'open').length;
   return {
-    restarts: events.filter(e => e.event === 'sw_start').length,
-    suspends: events.filter(e => e.event === 'suspend').length,
+    restarts: events.filter((e) => e.event === 'sw_start').length,
+    suspends: events.filter((e) => e.event === 'suspend').length,
     maxTickGapMs: maxGap(tickTimes),
     missedBinds,
   };
