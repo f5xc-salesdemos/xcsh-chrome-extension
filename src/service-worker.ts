@@ -7,7 +7,7 @@
  */
 
 import { isJsonMime, isXcResourceApi, resourceTypeFromUrl, shouldFetchBody } from './api-capture';
-import { type BridgeInfo, type BridgeRegistry } from './bridge-discovery';
+import { type BridgeInfo, type BridgeRegistry, portCandidates, portForTenant, stalePorts } from './bridge-discovery';
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
@@ -412,6 +412,34 @@ function scheduleFastReconnect(port: number): void {
 let manualPortPinned = false;
 function broadcastBridges(): void { /* E5 fills this in */ }
 
+const BRIDGE_SCAN_ALARM = 'bridge-scan';
+const BRIDGE_STALE_MS = 90_000; // > scan cadence; prune bridges gone silent
+
+/** Probe every port in the range (skip the ones already connected) and prune
+ * sockets that have gone silent. Manual-port mode (Task E7) pins one port. */
+function scanRange(): void {
+  if (manualPortPinned) return;
+  const now = Date.now();
+  for (const port of stalePorts(registry, now, BRIDGE_STALE_MS)) {
+    const s = sockets.get(port);
+    try { s?.close(); } catch { /* onclose cleans up */ }
+    sockets.delete(port);
+    registry.delete(port);
+  }
+  for (const port of portCandidates()) {
+    const s = sockets.get(port);
+    if (!s || (s.readyState !== WebSocket.OPEN && s.readyState !== WebSocket.CONNECTING)) connectPort(port);
+  }
+  broadcastBridges();
+}
+
+/** On-demand: if the focused tenant has no live socket yet, kick a scan so a
+ * just-launched xcsh is picked up without waiting for the ~30s alarm. */
+function ensureTenantSocket(sessionKey: string | null): void {
+  if (!sessionKey || manualPortPinned) return;
+  if (portForTenant(registry, sessionKey) === undefined) scanRange();
+}
+
 function connectPort(port: number): void {
   const existing = sockets.get(port);
   if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) return;
@@ -481,6 +509,13 @@ function onMessage(msg: any, sourcePort: number): void {
 
   // Identity handshake reply — record which tenant this bridge (port) serves.
   if (msg.type === 'hello_ack' || msg.type === 'tenant_changed') {
+    if (typeof msg.sessionId !== 'string') return; // not a real xcsh hello_ack
+    if (typeof msg.contractVersion === 'string' && msg.contractVersion.split('.')[0] !== CONTRACT_VERSION.split('.')[0]) {
+      // Major mismatch — close and forget this socket rather than trust it.
+      try { sockets.get(sourcePort)?.close(); } catch {}
+      sockets.delete(sourcePort);
+      return;
+    }
     const info: BridgeInfo = {
       port: sourcePort,
       tenant: (msg.tenant as string | null) ?? null,
@@ -526,7 +561,8 @@ startKeepAlive();
 startHeartbeat();
 // Connect immediately on the default port; then async-read any stored override.
 // (Moving connectPort() inside the async callback broke MV3 SW suspension timing.)
-connectPort(bridgePort);
+if (manualPortPinned) connectPort(bridgePort);
+else scanRange();
 // Bind the active console tab on startup so the panel has context without a prior navigate.
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
   if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id).catch(() => {});
@@ -583,7 +619,9 @@ chrome.storage.onChanged.addListener((_changes, areaName) => {
 // Managed-policy refresh alarm (~5 min) — picks up policy pushes even if the
 // onChanged event was missed while the SW was suspended.
 chrome.alarms.create(MANAGED_POLICY_ALARM, { periodInMinutes: 5 });
+chrome.alarms.create(BRIDGE_SCAN_ALARM, { periodInMinutes: 0.5 }); // ~30s
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === BRIDGE_SCAN_ALARM) { scanRange(); return; }
   if (alarm.name === MANAGED_POLICY_ALARM) {
     refreshManagedPolicy();
   }
