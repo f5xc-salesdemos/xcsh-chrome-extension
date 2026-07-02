@@ -179,3 +179,58 @@ export function removeTab(index: TabIndex, tabId: number): { index: TabIndex; re
   delete byTab[key];
   return { index: { byTab }, removedConv };
 }
+
+// --- SessionIndex: per-TENANT session map (Phase 2) ------------------------
+// Conversations are keyed by the session key ("tenant|env"), so MANY tabs of the
+// same tenant share ONE conversation and switching to a different tenant's tab
+// never carries the prior tenant's context. `byTab` maps a live tab to its
+// session key (for resolving the panel + cleanup on close); closing a tab does
+// NOT delete the tenant's conversation — it persists for that tenant's other/
+// future tabs.
+export interface SessionIndex {
+  /** session key ("tenant|env") → conversation id. */
+  byTenant: Record<string, string>;
+  /** live tab id → session key. */
+  byTab: Record<string, string>;
+}
+
+export function emptySessionIndex(): SessionIndex {
+  return { byTenant: {}, byTab: {} };
+}
+
+/** Bind a tab to a tenant's conversation (creating/reusing the tenant session). */
+export function setTenantConv(index: SessionIndex, sessionKey: string, tabId: number, convId: string): SessionIndex {
+  return {
+    byTenant: { ...index.byTenant, [sessionKey]: convId },
+    byTab: { ...index.byTab, [String(tabId)]: sessionKey },
+  };
+}
+
+/** The conversation id for a tenant session, if any. */
+export function tenantConv(index: SessionIndex, sessionKey: string): string | undefined {
+  return index.byTenant[sessionKey];
+}
+
+/** The session key a tab currently belongs to, if known. */
+export function tabSessionKey(index: SessionIndex, tabId: number): string | undefined {
+  return index.byTab[String(tabId)];
+}
+
+/** Forget a tab (on close) WITHOUT deleting the tenant's conversation. */
+export function removeTabSession(index: SessionIndex, tabId: number): SessionIndex {
+  const key = String(tabId);
+  if (!(key in index.byTab)) return index;
+  const byTab = { ...index.byTab };
+  delete byTab[key];
+  return { byTenant: index.byTenant, byTab };
+}
+
+/** Build a SessionIndex from an old TabIndex, given each tab's resolved session
+ * key (best-effort migration; entries with an unresolvable key are dropped). */
+export function sessionIndexFromTabIndex(
+  entries: Array<{ tabId: number; sessionKey: string; convId: string }>,
+): SessionIndex {
+  let idx = emptySessionIndex();
+  for (const e of entries) idx = setTenantConv(idx, e.sessionKey, e.tabId, e.convId);
+  return idx;
+}

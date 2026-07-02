@@ -26,19 +26,19 @@ import {
   finalizeAssistant,
   markAborted,
   newConversation,
-  removeTab,
+  removeTabSession,
   setMode,
-  setTabConv,
+  setTenantConv,
   startAssistant,
-  tabConv,
+  tenantConv,
 } from './references-store';
 import {
-  deleteConversations,
   loadConversation,
-  loadTabIndex,
+  loadSessionIndex,
   saveConversation,
-  saveTabIndex,
+  saveSessionIndex,
 } from './side-panel-store';
+import { sessionKeyFromUrl, sessionKeyStr } from './tab-binding';
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -67,6 +67,13 @@ let contextMeta: { title?: string; path?: string } | null = null;
 let attachContext = true;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let boundTabId: number | undefined;
+/** The session key ("tenant|env") the panel is currently showing, or null when
+ * inactive / on a non-tenant tab. Conversations are locked to this, not to a tab
+ * — so many tabs of one tenant share it and a different tenant never carries. */
+let boundSessionKey: string | null = null;
+/** True when the active tab is NOT an F5 XC tenant — the panel is gated inactive
+ * and the SW's page_context must not repaint a stale tenant chip. */
+let panelInactive = false;
 let isConnected = false;
 
 const TURN_TIMEOUT_MS = 30_000;
@@ -114,12 +121,13 @@ function setConnected(on: boolean): void {
   }
 }
 
-function showInactive(): void {
-  conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
-  renderAll();
-}
-
 function renderContextChip(): void {
+  // While gated inactive (active tab isn't an F5 XC tenant), never repaint a
+  // tenant page context — the SW's page_context is for the still-controlled tab.
+  if (panelInactive) {
+    ctxChipEl.textContent = 'open an F5 XC console page';
+    return;
+  }
   if (attachContext && contextMeta) {
     ctxChipEl.textContent = contextMeta.title ?? contextMeta.path ?? 'current page';
   } else {
@@ -266,27 +274,98 @@ function updateAssistantBody(msgId: string, text: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Per-tab session helpers
+// Per-tenant session helpers
 // ---------------------------------------------------------------------------
 
-async function switchToTabSession(tabId: number): Promise<void> {
-  const idx = await loadTabIndex();
-  const convId = tabConv(idx, tabId);
+/** Show the conversation for a tenant session ("tenant|env"), or a blank
+ * inactive conversation when `sessionKey` is null (non-tenant tab). Many tabs of
+ * the same tenant resolve to the SAME conversation. */
+async function switchToTenantSession(sessionKey: string | null): Promise<void> {
+  boundSessionKey = sessionKey;
+  if (!sessionKey) {
+    conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
+    renderAll();
+    return;
+  }
+  const idx = await loadSessionIndex();
+  const convId = tenantConv(idx, sessionKey);
   const existing = convId ? await loadConversation(convId) : null;
   conv = existing ?? newConversation(`conv-${crypto.randomUUID()}`, Date.now());
-  if (!existing) {
-    await saveTabIndex(setTabConv(idx, tabId, conv.id));
+  if (!existing && boundTabId !== undefined) {
+    await saveSessionIndex(setTenantConv(idx, sessionKey, boundTabId, conv.id));
     await saveConversation(conv);
   }
   renderAll();
 }
 
+/** Forget a closed tab WITHOUT deleting the tenant's conversation (it persists
+ * for that tenant's other/future tabs — many-tabs -> one-session). */
 async function pruneTabSession(tabId: number): Promise<void> {
-  const idx = await loadTabIndex();
-  const { index, removedConv } = removeTab(idx, tabId);
-  await saveTabIndex(index);
-  if (removedConv) await deleteConversations([removedConv]);
+  const idx = await loadSessionIndex();
+  await saveSessionIndex(removeTabSession(idx, tabId));
 }
+
+/** Associate the CURRENT (in-flight) conversation with a tenant the first time we
+ * learn it mid-turn, without swapping — so the flagship first run's chat belongs
+ * to the tenant it drove. No-op if the tenant already has a session. */
+async function adoptCurrentConvForTenant(sessionKey: string, tabId: number): Promise<void> {
+  const idx = await loadSessionIndex();
+  if (tenantConv(idx, sessionKey)) return;
+  await saveSessionIndex(setTenantConv(idx, sessionKey, tabId, conv.id));
+  await saveConversation(conv);
+}
+
+/**
+ * Activation gating, PANEL-OWNED. The side panel is a live document while open,
+ * so it observes tab changes directly (chrome.tabs / windows) — reliable even
+ * when the MV3 service worker is suspended (which makes the SW's own onActivated
+ * miss events). It resolves the focused window's active tab, and:
+ *   - valid F5 XC tenant tab  → show that tenant's session (many-tabs->one),
+ *   - anything else (blank, non-console, unrecognized host) → go inactive.
+ * An in-flight automation turn is never disrupted (bug 2): the SW's `tab_bound`
+ * adopt path handles binding during a turn.
+ */
+async function gateToActiveTab(tabId?: number): Promise<void> {
+  if (active !== null) return; // a turn owns the panel — never blank mid-run
+  // Resolve the tab from the event's id when available (unambiguous); otherwise
+  // fall back to the focused window's active tab.
+  let tab: chrome.tabs.Tab | undefined;
+  if (tabId !== undefined) {
+    tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  }
+  if (!tab) {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+    tab = tabs[0];
+  }
+  const key = sessionKeyFromUrl(tab?.url);
+  const keyStr = key ? sessionKeyStr(key) : null;
+  // The gate is the SINGLE authority for the panel's display when idle.
+  if (keyStr) {
+    // Active tab is a tenant console. Show its session (swap only if it changed).
+    panelInactive = false;
+    boundTabId = tab?.id;
+    ctxChipEl.textContent = tab?.title || tab?.url || 'console tab';
+    if (keyStr !== boundSessionKey) await switchToTenantSession(keyStr);
+  } else {
+    // Active tab is NOT a tenant — ENFORCE inactive every time (never skip): the
+    // SW's page_context/tab_bound for the still-controlled tab must not win.
+    panelInactive = true;
+    boundTabId = undefined;
+    boundSessionKey = null;
+    ctxChipEl.textContent = 'open an F5 XC console page';
+    conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
+    renderAll();
+  }
+}
+
+chrome.tabs.onActivated.addListener(({ tabId }) => void gateToActiveTab(tabId));
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.url) void gateToActiveTab(tabId);
+});
+// NOTE: no chrome.windows.onFocusChanged handler — it fired gateToActiveTab()
+// with no tabId, whose fallback active-tab query resolved the STALE console tab
+// and reverted the correct onActivated result. onActivated/onUpdated (which
+// carry an unambiguous tabId) cover tab switches and navigations.
 
 // ---------------------------------------------------------------------------
 // Turn lifecycle
@@ -333,19 +412,41 @@ port.onMessage.addListener((m: unknown) => {
     return;
   }
 
+  // Phase 1: which tenant the connected xcsh process serves (from the handshake).
+  // Surfaced as a tooltip on the connection dot so the operator can confirm the
+  // running session matches the tab's tenant.
+  if (msg.type === 'session_info') {
+    const t = msg.tenant as string | null;
+    const e = msg.env as string | null;
+    const label = t ? `${t}${e ? `·${e}` : ''}` : 'no context';
+    connEl.title = t ? `xcsh session: ${t}${e ? ` (${e})` : ''}` : 'xcsh session: no active context';
+    const sessEl = document.getElementById('sess');
+    if (sessEl) sessEl.textContent = label;
+    return;
+  }
+
   if (msg.type === 'tab_bound') {
-    abortActiveTurn('Tab changed — chat ended. Resend to continue.');
-    boundTabId = msg.tabId as number;
-    ctxChipEl.textContent = (msg.title as string) || (msg.url as string) || 'console tab';
-    switchToTabSession(boundTabId).catch(() => {});
+    // When IDLE, the panel-owned gate (gateToActiveTab, driven by the panel's own
+    // chrome.tabs listeners) is the SINGLE authority for the display — ignore the
+    // SW's tab_bound to avoid competing writes that fight the gate. Only act
+    // during an in-flight turn: the automation binds the tab it drives, so adopt
+    // that tenant for the current conversation (bug 2 — never blank mid-run).
+    if (active === null) return;
+    const incomingTabId = msg.tabId as number;
+    const key = sessionKeyFromUrl(msg.url as string | undefined);
+    const keyStr = key ? sessionKeyStr(key) : null;
+    if (keyStr && boundSessionKey === null) {
+      boundSessionKey = keyStr;
+      boundTabId = incomingTabId;
+      void adoptCurrentConvForTenant(keyStr, incomingTabId);
+    }
     return;
   }
 
   if (msg.type === 'tab_unbound' || msg.type === 'tab_inactive') {
-    abortActiveTurn('Tab changed — chat ended. Resend to continue.');
-    boundTabId = undefined;
-    ctxChipEl.textContent = 'open an F5 XC console page';
-    showInactive();
+    // Defer to the panel-owned gate: it is the single authority for going inactive
+    // when the active tab isn't a tenant. Ignoring the SW's (suspension-prone,
+    // sometimes stale) signals here prevents them from fighting the gate.
     return;
   }
 
@@ -543,11 +644,11 @@ stopBtn.addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Boot: show inactive state; session is set by first tab_bound from the SW
+// Boot: show inactive, then gate to the active tab's tenant (panel-owned).
 // ---------------------------------------------------------------------------
 
 (async () => {
-  // Start with a blank placeholder conversation (shown as inactive until tab binds)
+  // Start with a blank placeholder conversation (shown as inactive until gated)
   conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
 
   populateModeSelector(conv.mode);
@@ -556,4 +657,7 @@ stopBtn.addEventListener('click', () => {
 
   port.postMessage({ type: 'status_request' });
   port.postMessage({ type: 'get_page_context' });
+  // Resolve the current active tab immediately so the panel opens on the right
+  // tenant session (or inactive) without waiting on the SW.
+  await gateToActiveTab();
 })();

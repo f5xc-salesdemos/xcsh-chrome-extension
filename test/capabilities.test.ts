@@ -29,6 +29,8 @@ const EXPECTED_TOOLS = [
   'resize_window',
   'read_console',
   'read_network',
+  'diag_suspension',
+  'capture_login_flow',
   'wait_for_api_response',
   'file_upload',
   'browser_batch',

@@ -13,11 +13,17 @@ import {
   markAborted,
   newConversation,
   pruneConversations,
+  emptySessionIndex,
   removeTab,
+  removeTabSession,
+  sessionIndexFromTabIndex,
   setMode,
   setTabConv,
+  setTenantConv,
   startAssistant,
   tabConv,
+  tabSessionKey,
+  tenantConv,
 } from '../src/references-store';
 
 describe('conversation lifecycle', () => {
@@ -118,6 +124,43 @@ describe('interaction modes and tool entries (addendum)', () => {
     expect(c.messages[0].aborted).toBeUndefined();
     expect(c.messages[1].aborted).toBe(true);
     expect(c.messages[2].aborted).toBeUndefined();
+  });
+});
+
+describe('SessionIndex (per-tenant session map)', () => {
+  it('maps many tabs of one tenant to a single conversation', () => {
+    let idx = emptySessionIndex();
+    idx = setTenantConv(idx, 'acme|staging', 10, 'conv-acme');
+    idx = setTenantConv(idx, 'acme|staging', 11, 'conv-acme'); // second tab, same tenant
+    expect(tenantConv(idx, 'acme|staging')).toBe('conv-acme');
+    expect(tabSessionKey(idx, 10)).toBe('acme|staging');
+    expect(tabSessionKey(idx, 11)).toBe('acme|staging');
+  });
+  it('keeps conversations distinct across tenants and environments', () => {
+    let idx = emptySessionIndex();
+    idx = setTenantConv(idx, 'acme|staging', 10, 'conv-a-stg');
+    idx = setTenantConv(idx, 'acme|production', 20, 'conv-a-prod');
+    idx = setTenantConv(idx, 'globex|staging', 30, 'conv-g-stg');
+    expect(tenantConv(idx, 'acme|staging')).toBe('conv-a-stg');
+    expect(tenantConv(idx, 'acme|production')).toBe('conv-a-prod');
+    expect(tenantConv(idx, 'globex|staging')).toBe('conv-g-stg');
+  });
+  it('removing a tab keeps the tenant conversation (many-tabs -> one-session)', () => {
+    let idx = setTenantConv(setTenantConv(emptySessionIndex(), 'acme|staging', 10, 'conv-a'), 'acme|staging', 11, 'conv-a');
+    idx = removeTabSession(idx, 10);
+    expect(tabSessionKey(idx, 10)).toBeUndefined();
+    expect(tabSessionKey(idx, 11)).toBe('acme|staging');
+    expect(tenantConv(idx, 'acme|staging')).toBe('conv-a'); // conv persists for tab 11 / future tabs
+  });
+  it('migrates an old TabIndex using resolved session keys', () => {
+    const idx = sessionIndexFromTabIndex([
+      { tabId: 5, sessionKey: 'acme|staging', convId: 'conv-old-5' },
+      { tabId: 6, sessionKey: 'acme|staging', convId: 'conv-old-5' },
+      { tabId: 7, sessionKey: 'globex|production', convId: 'conv-old-7' },
+    ]);
+    expect(tenantConv(idx, 'acme|staging')).toBe('conv-old-5');
+    expect(tenantConv(idx, 'globex|production')).toBe('conv-old-7');
+    expect(tabSessionKey(idx, 6)).toBe('acme|staging');
   });
 });
 

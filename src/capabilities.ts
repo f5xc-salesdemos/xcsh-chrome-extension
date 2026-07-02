@@ -211,6 +211,18 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
     params: Type.Object({ pattern: Type.Optional(Type.String()) }),
   },
   {
+    name: 'diag_suspension',
+    summary: 'Diagnostic: SW-lifecycle event buffer + suspension summary (Phase 0a).',
+    category: 'read',
+    params: empty,
+  },
+  {
+    name: 'capture_login_flow',
+    summary: 'Diagnostic: captured login redirect chain annotated with tenant/env (Phase 0b).',
+    category: 'read',
+    params: empty,
+  },
+  {
     name: 'wait_for_api_response',
     summary: 'Wait for a network response whose URL matches a pattern.',
     category: 'read',

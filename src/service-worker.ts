@@ -7,11 +7,19 @@
  */
 
 import { isJsonMime, isXcResourceApi, resourceTypeFromUrl, shouldFetchBody } from './api-capture';
-import { buildCapabilities, getToolDef, toolNames } from './capabilities';
+import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
+import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
-import { type BindingState, decideBinding, isConsoleUrl, isLinkStale } from './tab-binding';
+import {
+  type BindingState,
+  decideBinding,
+  isConsoleUrl,
+  isLinkStale,
+  sessionKeyFromUrl,
+  shouldAnnounceBind,
+} from './tab-binding';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
 const DEFAULT_BRIDGE_PORT = 19222;
@@ -100,6 +108,10 @@ let ws: WebSocket | null = null;
 
 // The console tab the SW is currently driving (set in `navigate`).
 let targetTabId: number | undefined;
+// Phase 1: identity of the xcsh process this SW is connected to (from hello_ack).
+let sessionTenant: string | null = null;
+let sessionEnv: string | null = null;
+let sessionId: string | null = null;
 
 // Cached login credentials for session-expiry auto-recovery. Set by login(),
 // used by navigate() to transparently re-authenticate when the session expires.
@@ -134,6 +146,56 @@ const consoleBuffer: any[] = [];
 const networkBuffer: any[] = [];
 let observingConsole = false;
 let observingNetwork = false;
+
+// --- Phase 0a: SW-lifecycle diagnostics ------------------------------------
+// A capped ring buffer of lifecycle events, persisted to chrome.storage.local so
+// it SURVIVES service-worker restarts — the whole point is to measure MV3
+// suspension (gaps between keepalive ticks) and binds missed while suspended.
+const DIAG_CAP = 400;
+const DIAG_KEY = 'xcsh.diag.suspension';
+let diagBuffer: DiagEvent[] = [];
+let diagFlushTimer: ReturnType<typeof setTimeout> | null = null;
+function recordDiag(event: string, detail: Record<string, unknown> = {}): void {
+  pushCapped(diagBuffer, { t: Date.now(), event, ...detail }, DIAG_CAP);
+  if (diagFlushTimer) return; // debounce persistence (~1s) to avoid storage churn
+  diagFlushTimer = setTimeout(() => {
+    diagFlushTimer = null;
+    chrome.storage.local.set({ [DIAG_KEY]: diagBuffer }).catch(() => {});
+  }, 1000);
+}
+// Load persisted history on (re)start, then stamp this SW start — the gap
+// between the previous last event and this sw_start reveals the suspension window.
+chrome.storage.local
+  .get(DIAG_KEY)
+  .then(r => {
+    const prior = (r?.[DIAG_KEY] as DiagEvent[] | undefined) ?? [];
+    diagBuffer = prior.slice(-DIAG_CAP);
+    recordDiag('sw_start', {});
+  })
+  .catch(() => recordDiag('sw_start', {}));
+
+/** Human-readable WebSocket state for diagnostics ('open'|'connecting'|'closed'|'none'). */
+function wsStateLabel(): string {
+  if (!ws) return 'none';
+  switch (ws.readyState) {
+    case WebSocket.OPEN:
+      return 'open';
+    case WebSocket.CONNECTING:
+      return 'connecting';
+    default:
+      return 'closed';
+  }
+}
+
+// MV3 suspension signals — Chrome fires onSuspend just before it kills the SW
+// (and onSuspendCanceled if it changes its mind). Recording these bounds the
+// suspension window precisely against the following sw_start on restart.
+chrome.runtime.onSuspend.addListener(() => {
+  recordDiag('suspend', { wsState: wsStateLabel() });
+  // Force a synchronous-ish flush; storage.set is best-effort during teardown.
+  chrome.storage.local.set({ [DIAG_KEY]: diagBuffer }).catch(() => {});
+});
+chrome.runtime.onSuspendCanceled.addListener(() => recordDiag('suspend_canceled', {}));
 
 // Chat: panel Ports keyed by chat-turn id ("c-…"), and the latest captured XC
 // API response per tab (ground-truth for the page-context snapshot).
@@ -305,6 +367,7 @@ function startKeepAlive(): void {
   keepAliveTimer = setInterval(() => {
     // Any extension API call resets the idle timer. getPlatformInfo is trivial.
     chrome.runtime.getPlatformInfo(() => void chrome.runtime.lastError);
+    recordDiag('keepalive', { wsState: wsStateLabel() });
   }, 20_000);
 }
 
@@ -332,6 +395,13 @@ function connect(): void {
     ws = sock;
     sock.onopen = () => {
       lastActivityTs = Date.now();
+      recordDiag('ws_open', { port: bridgePort });
+      // Identity handshake (Phase 1): ask which tenant this xcsh process serves.
+      try {
+        sock.send(JSON.stringify({ type: 'hello', contractVersion: CONTRACT_VERSION, extensionId: chrome.runtime.id }));
+      } catch {
+        /* socket may have dropped immediately */
+      }
       pushStatus(true);
     };
     sock.onmessage = (ev) => {
@@ -342,6 +412,7 @@ function connect(): void {
       // Only clear the shared ref if this socket is still the current one, then
       // re-attach quickly so a newly-started bridge's probe finds us.
       if (ws === sock) ws = null;
+      recordDiag('ws_close', { port: bridgePort });
       pushStatus(false, 'closed');
       failActiveTurns('bridge disconnected');
       scheduleFastReconnect();
@@ -366,6 +437,16 @@ function onMessage(msg: any): void {
 
   if (msg.type === 'ping') {
     send({ type: 'pong' });
+    return;
+  }
+
+  // Phase 1: the bridge's answer to our `hello` — which tenant this xcsh process
+  // serves. Store it and tell the panel so it can show/confirm the tenant.
+  if (msg.type === 'hello_ack' || msg.type === 'tenant_changed') {
+    sessionTenant = (msg.tenant as string | null) ?? null;
+    sessionEnv = (msg.env as string | null) ?? null;
+    sessionId = (msg.sessionId as string | null) ?? null;
+    broadcastToChatPanels({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
     return;
   }
 
@@ -430,6 +511,21 @@ chrome.storage.local.get('bridgePort', (data) => {
 // Open the side panel when the toolbar icon is clicked (requires an `action`
 // with no default_popup in the manifest). Must run at top level — the SW restarts.
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
+
+/**
+ * Per-tab side-panel gating: the xcsh panel is ENABLED only on valid F5 XC
+ * tenant tabs (production or staging console), so it never appears — and
+ * auto-hides — on any other tab (new-tab page, search, non-console sites).
+ * Driven by tab activation/navigation, which wake the SW.
+ */
+async function applySidePanelGate(tabId: number, url: string | undefined): Promise<void> {
+  const enabled = sessionKeyFromUrl(url) !== null;
+  try {
+    await chrome.sidePanel.setOptions({ tabId, path: 'side-panel.html', enabled });
+  } catch {
+    /* tab may be gone, or sidePanel API unavailable */
+  }
+}
 
 // Read the managed enterprise policy on startup.
 refreshManagedPolicy();
@@ -511,6 +607,9 @@ chrome.runtime.onConnect.addListener((port) => {
   });
   // Greet with current connection status so the panel can render its dot.
   port.postMessage({ type: 'status', connected: ws?.readyState === WebSocket.OPEN });
+  // Also replay the current session identity (from the last hello_ack) so a panel
+  // that connected AFTER the handshake still learns which tenant xcsh serves.
+  port.postMessage({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
   // Proactively bind the active console tab when the panel opens (idle only).
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
     if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url) && tab.id !== targetTabId) {
@@ -611,6 +710,8 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
   resize_window: resizeWindow,
   read_console: readConsole,
   read_network: readNetwork,
+  diag_suspension: diagSuspension,
+  capture_login_flow: captureLoginFlow,
   wait_for_api_response: waitForApiResponse,
   file_upload: fileUpload,
   browser_batch: browserBatch,
@@ -1470,7 +1571,13 @@ async function setControlledTab(tabId: number | undefined): Promise<void> {
     /* tabGroups can fail on some tab states — the binding still holds */
   }
   const tab = await chrome.tabs.get(tabId).catch(() => undefined);
-  broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab?.url, title: tab?.title });
+  // Only announce a bind when the controlled tab actually changed. Re-navigating
+  // the already-bound tab (the agent's own first workflow step) must not fire a
+  // fresh `tab_bound` — the panel treats that as an ownership change and ends the
+  // in-flight turn, blanking the transcript mid-automation.
+  if (shouldAnnounceBind(prev, tabId)) {
+    broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab?.url, title: tab?.title });
+  }
 }
 
 /** Build the page-context snapshot for the active console tab. */
@@ -2190,6 +2297,21 @@ async function readNetwork(params: { pattern?: string }): Promise<{
   return { requests: entries.slice(-100) };
 }
 
+// --- Phase 0 diagnostics tools ---------------------------------------------
+
+/** Read-only: the SW-lifecycle diagnostics buffer + a computed suspension summary
+ * (restarts, suspends, max keepalive-tick gap = suspension window, missed binds). */
+async function diagSuspension(): Promise<{ summary: unknown; events: DiagEvent[] }> {
+  return { summary: summarizeSuspension(diagBuffer), events: diagBuffer.slice(-DIAG_CAP) };
+}
+
+/** Capture the login redirect chain from the controlled tab's CDP network events,
+ * annotated with the tenant/env each hop resolves to (Phase 0b login-topology). */
+async function captureLoginFlow(): Promise<{ hops: unknown[] }> {
+  await enableNetworkObserver();
+  return { hops: extractRedirects(networkBuffer, sessionKeyFromUrl) };
+}
+
 // --- File upload (best-effort, Phase 1) ------------------------------------
 
 async function fileUpload(params: {
@@ -2281,12 +2403,42 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   const tab = await chrome.tabs.get(tabId).catch(() => undefined);
   const a = decideBinding(bindingState(), { kind: 'activated', tabId, url: tab?.url });
+  const key = sessionKeyFromUrl(tab?.url);
+  // Hide/show the panel per-tab: only F5 XC tenant tabs get it.
+  void applySidePanelGate(tabId, tab?.url);
+  // Phase 0a: record activations that WOULD bind a console tab, with the WS
+  // state — a would_bind while wsState !== 'open' is a missed passive bind.
+  if (a.action === 'bind' || isConsoleUrl(tab?.url)) {
+    recordDiag('would_bind', {
+      tabId,
+      action: a.action,
+      wsState: wsStateLabel(),
+      tenant: key?.tenant ?? null,
+      env: key?.env ?? null,
+    });
+  }
+  // Activation gating: the PANEL follows the ACTIVE tab's tenant, decoupled from
+  // the controlled (automation) tab. A valid tenant console tab shows that
+  // tenant's session; ANY other tab (blank, non-console, a volterra host that
+  // isn't a recognized tenant) shows inactive — the xcsh session never loads on
+  // a non-F5-XC-tenant tab. The controlled tab is NOT unbound here, so a running
+  // automation keeps driving its tab even while the user looks at another tab.
+  if (key) {
+    // setControlledTab broadcasts tab_bound when it binds; otherwise announce the
+    // active tenant explicitly so the panel shows it even without a (re)bind.
+    if (a.action !== 'bind') {
+      broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab?.url, title: tab?.title });
+    }
+  } else {
+    broadcastToChatPanels({ type: 'tab_inactive' });
+  }
   if (a.action === 'bind') await setControlledTab(a.tabId);
-  else if (a.action === 'inactive') broadcastToChatPanels({ type: 'tab_inactive' });
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.url === undefined) return;
+  // Re-gate the panel when a tab navigates (e.g. blank tab → console, or away).
+  void applySidePanelGate(tabId, changeInfo.url);
   const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
   if (a.action === 'unbind') await setControlledTab(undefined);
 });

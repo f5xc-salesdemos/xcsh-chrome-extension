@@ -530,6 +530,26 @@
       }
     },
     {
+      "name": "diag_suspension",
+      "summary": "Diagnostic: SW-lifecycle event buffer + suspension summary (Phase 0a).",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {}
+    },
+    {
+      "name": "capture_login_flow",
+      "summary": "Diagnostic: captured login redirect chain annotated with tenant/env (Phase 0b).",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {}
+    },
+    {
       "name": "wait_for_api_response",
       "summary": "Wait for a network response whose URL matches a pattern.",
       "category": "read",

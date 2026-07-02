@@ -1,9 +1,12 @@
 /**
- * Options page script — reports live connection status to the xcsh native host.
+ * Options page script — reports live connection status to the xcsh native host
+ * and renders the Phase 0a suspension-diagnostics timeline.
  *
  * Pings the service worker via `status_request`; the SW replies with whether
  * its native-messaging port is currently connected.
  */
+
+import { type DiagEvent, summarizeSuspension } from './diagnostics';
 
 // biome-ignore lint/style/noNonNullAssertion: DOM element guaranteed
 const el = document.getElementById('status')!;
@@ -24,3 +27,27 @@ chrome.runtime.sendMessage({ type: 'status_request' }, (resp: { connected?: bool
   }
   render(!!resp?.connected);
 });
+
+// --- Phase 0a: suspension-diagnostics timeline -----------------------------
+const DIAG_KEY = 'xcsh.diag.suspension';
+const summaryEl = document.getElementById('diag-summary');
+const eventsEl = document.getElementById('diag-events');
+
+async function renderDiag(): Promise<void> {
+  if (!summaryEl || !eventsEl) return;
+  const r = await chrome.storage.local.get(DIAG_KEY);
+  const events = ((r?.[DIAG_KEY] as DiagEvent[] | undefined) ?? []).slice(-60);
+  const s = summarizeSuspension(events);
+  summaryEl.textContent = `restarts ${s.restarts} · suspends ${s.suspends} · max tick gap ${(s.maxTickGapMs / 1000).toFixed(1)}s · missed binds ${s.missedBinds}`;
+  const t0 = events.length ? events[0].t : 0;
+  eventsEl.textContent = events
+    .map(e => {
+      const { t, event, ...rest } = e;
+      const rel = `+${((t - t0) / 1000).toFixed(1)}s`.padStart(9);
+      return `${rel}  ${event.padEnd(16)} ${JSON.stringify(rest)}`;
+    })
+    .join('\n');
+}
+
+document.getElementById('diag-refresh')?.addEventListener('click', () => void renderDiag());
+void renderDiag();
