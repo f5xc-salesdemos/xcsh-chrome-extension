@@ -5,6 +5,7 @@
  * SW carries chat_request out and streamed chat_delta/done/error back.
  */
 
+import type { LiveTenant } from './bridge-discovery';
 import {
   buildChatRequest,
   buildChatStop,
@@ -18,6 +19,7 @@ import {
   reduceChatTurn,
 } from './chat-protocol';
 import { renderMarkdown, renderReferenceChip } from './markdown-render';
+import { contextHintTenant } from './nm-bootstrap';
 import {
   appendAssistantDelta,
   appendToolNotice,
@@ -70,7 +72,9 @@ let boundSessionKey: string | null = null;
  * and the SW's page_context must not repaint a stale tenant chip. */
 let panelInactive = false;
 let isConnected = false;
-let liveTenants = new Set<string>();
+/** Live bridges the SW last broadcast: session key ("tenant|env") + contextBound.
+ * The single source of truth for both tenant liveness and the contextless hint. */
+let liveTenants: LiveTenant[] = [];
 let inputBlocked = false;
 function setInputEnabled(on: boolean): void {
   inputBlocked = !on;
@@ -119,6 +123,24 @@ function setConnected(on: boolean): void {
     }
   } else if (banner) {
     banner.remove();
+  }
+}
+
+/** Show/hide a one-line, non-blocking MOTD hint nudging the operator to run the
+ * `/context` wizard when the connected worker is contextless. `tenant === null`
+ * hides it. Reuses the conn-banner insertion pattern (above the message list). */
+function setContextHint(tenant: string | null): void {
+  let hint = document.getElementById('context-hint');
+  if (tenant) {
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.id = 'context-hint';
+      hint.className = 'conn-banner';
+      messagesEl.parentElement?.insertBefore(hint, messagesEl);
+    }
+    hint.textContent = `No context for ${tenant} — run /context wizard to enable API features.`;
+  } else if (hint) {
+    hint.remove();
   }
 }
 
@@ -343,13 +365,15 @@ async function gateToActiveTab(tabId?: number): Promise<void> {
   const sessEl = document.getElementById('sess');
   // The gate is the SINGLE authority for the panel's display when idle.
   if (keyStr && key) {
-    if (!liveTenants.has(keyStr)) {
+    if (!liveTenants.some((t) => t.tenant === keyStr)) {
       // Valid tenant tab but no xcsh process for it — guide, never route elsewhere.
+      // No live bridge → no contextless hint (also clears any stale one on disconnect).
       panelInactive = true;
       boundTabId = tab?.id;
       boundSessionKey = null;
       ctxChipEl.textContent = `No xcsh running for ${key.tenant}·${key.env} — start it in that context`;
       if (sessEl) sessEl.textContent = `${key.tenant}·${key.env}`;
+      setContextHint(null);
       setInputEnabled(false);
       conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
       renderAll();
@@ -360,6 +384,9 @@ async function gateToActiveTab(tabId?: number): Promise<void> {
     boundTabId = tab?.id;
     ctxChipEl.textContent = tab?.title || tab?.url || 'console tab';
     if (sessEl) sessEl.textContent = `${key.tenant}·${key.env}`;
+    // Contextless MOTD hint keyed off the FOCUSED tab's tenant (not the SW's global
+    // single-session mirror): show it iff THIS tenant's live worker is contextless.
+    setContextHint(contextHintTenant(keyStr, liveTenants) ? `${key.tenant}·${key.env}` : null);
     if (keyStr !== boundSessionKey) await switchToTenantSession(keyStr);
   } else {
     // Active tab is NOT a tenant — ENFORCE inactive every time (never skip): the
@@ -369,6 +396,7 @@ async function gateToActiveTab(tabId?: number): Promise<void> {
     boundSessionKey = null;
     ctxChipEl.textContent = 'open an F5 XC console page';
     if (sessEl) sessEl.textContent = '';
+    setContextHint(null);
     setInputEnabled(true);
     conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
     renderAll();
@@ -438,11 +466,15 @@ port.onMessage.addListener((m: unknown) => {
     const t = msg.tenant as string | null;
     const e = msg.env as string | null;
     connEl.title = t ? `xcsh session: ${t}${e ? ` (${e})` : ''}` : 'xcsh session: no active context';
+    // NOTE: the contextless MOTD hint is NOT driven from this global single-session
+    // mirror (it reflects the LAST worker to ack, which under multi-tenant flips on
+    // a background worker's ack). It is derived per focused tab in gateToActiveTab
+    // from the live-bridge list, so it always tracks the tenant the operator sees.
     return;
   }
 
   if (msg.type === 'bridges') {
-    liveTenants = new Set((msg.tenants as string[]) ?? []);
+    liveTenants = (msg.tenants as LiveTenant[]) ?? [];
     void gateToActiveTab(); // re-evaluate the focused tab against the new set
     return;
   }

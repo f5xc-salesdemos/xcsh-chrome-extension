@@ -20,6 +20,7 @@ import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
+import { hasNoRemainingTenantTab, shouldProvision } from './nm-bootstrap';
 import {
   type BindingState,
   decideBinding,
@@ -126,6 +127,49 @@ const knownPorts = new Set<number>();
 // Per-port fast-reconnect timers (coalesced), replacing the single-socket timer.
 const fastReconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
+// --- Native-messaging bootstrap (auto-provisioning) ------------------------
+// A single native-messaging port to the xcsh chrome-host. When a focused tenant
+// tab has no bridge, we `provision {tenantKey}` and the manager spawns a worker
+// on a range port; the Phase-3 scan then discovers it and routes. When a
+// tenant's last tab closes, we `release {tenantKey}` so the manager reaps it.
+const NM_HOST = 'com.xcsh.xcsh.chrome_host';
+let nmPort: chrome.runtime.Port | null = null;
+function ensureNativeHost(): chrome.runtime.Port | null {
+  if (nmPort) return nmPort;
+  try {
+    const p = chrome.runtime.connectNative(NM_HOST);
+    p.onDisconnect.addListener(() => {
+      nmPort = null;
+      recordDiag('nm_disconnect', {});
+    });
+    nmPort = p;
+    recordDiag('nm_connect', {});
+    return p;
+  } catch {
+    recordDiag('nm_unavailable', {}); // host not installed → panel shows install hint
+    return null;
+  }
+}
+function nmSend(msg: unknown): boolean {
+  const p = ensureNativeHost();
+  try {
+    p?.postMessage(msg);
+    return !!p;
+  } catch {
+    nmPort = null;
+    return false;
+  }
+}
+
+// tabId → sessionKeyStr for open tenant tabs. `onRemoved` carries no URL, so we
+// record each tab's tenant key as it is computed in onActivated/onUpdated and
+// read it here before pruning, to decide whether to `release` on last-tab-close.
+const tabSessionKeys = new Map<number, string>();
+function trackTabSessionKey(tabId: number, sessionKey: string | null): void {
+  if (sessionKey) tabSessionKeys.set(tabId, sessionKey);
+  else tabSessionKeys.delete(tabId);
+}
+
 /** Any bridge socket currently OPEN? (drives the panel's connection dot.) */
 function anyOpen(): boolean {
   for (const s of sockets.values()) if (s.readyState === WebSocket.OPEN) return true;
@@ -138,6 +182,9 @@ let targetTabId: number | undefined;
 let sessionTenant: string | null = null;
 let sessionEnv: string | null = null;
 let sessionId: string | null = null;
+// Whether the connected xcsh worker has an active stored context (from hello_ack).
+// Contextless (false) means API-backed features are unavailable → panel shows a hint.
+let sessionContextBound = false;
 
 // Cached login credentials for session-expiry auto-recovery. Set by login(),
 // used by navigate() to transparently re-authenticate when the session expires.
@@ -467,6 +514,11 @@ function setActiveTenant(sessionKey: string | null): void {
   if (isInFlight() || turnToPort.size > 0) return; // a turn owns routing
   ensureTenantSocket(sessionKey);
   activePort = portForTenant(registry, sessionKey);
+  // No bridge for the focused tenant → ask the manager to spawn a worker; the
+  // scan (already kicked by ensureTenantSocket) discovers its port and routes.
+  if (shouldProvision(sessionKey, activePort, manualPortPinned)) {
+    nmSend({ type: 'provision', tenantKey: sessionKey });
+  }
 }
 
 function connectPort(port: number): void {
@@ -566,6 +618,7 @@ function onMessage(msg: any, sourcePort: number): void {
       tenant: (msg.tenant as string | null) ?? null,
       env: (msg.env as string | null) ?? null,
       sessionId: (msg.sessionId as string | null) ?? null,
+      contextBound: msg.contextBound === true, // additive optional field; anything non-true → false
       lastSeen: Date.now(),
     };
     registry.set(sourcePort, info);
@@ -574,8 +627,15 @@ function onMessage(msg: any, sourcePort: number): void {
     sessionTenant = info.tenant;
     sessionEnv = info.env;
     sessionId = info.sessionId;
+    sessionContextBound = info.contextBound;
     if (activePort === undefined && sockets.get(sourcePort)?.readyState === WebSocket.OPEN) activePort = sourcePort;
-    broadcastToChatPanels({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
+    broadcastToChatPanels({
+      type: 'session_info',
+      tenant: sessionTenant,
+      env: sessionEnv,
+      sessionId,
+      contextBound: sessionContextBound,
+    });
     broadcastBridges();
     return;
   }
@@ -608,6 +668,10 @@ startHeartbeat();
 // (Moving connectPort() inside the async callback broke MV3 SW suspension timing.)
 if (manualPortPinned) connectPort(bridgePort);
 else scanRange();
+// Open the native-messaging bootstrap channel to the xcsh chrome-host so
+// provision/release can reach the manager. No-op (records nm_unavailable) if
+// the host isn't installed — the panel surfaces an install hint.
+ensureNativeHost();
 // Bind the active console tab on startup so the panel has context without a prior navigate.
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
   if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id).catch(() => {});
@@ -768,7 +832,13 @@ chrome.runtime.onConnect.addListener((port) => {
   port.postMessage({ type: 'status', connected: anyOpen() });
   // Also replay the current session identity (from the last hello_ack) so a panel
   // that connected AFTER the handshake still learns which tenant xcsh serves.
-  port.postMessage({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
+  port.postMessage({
+    type: 'session_info',
+    tenant: sessionTenant,
+    env: sessionEnv,
+    sessionId,
+    contextBound: sessionContextBound,
+  });
   port.postMessage({ type: 'bridges', tenants: liveTenants(registry) });
   // Proactively bind the active console tab when the panel opens (idle only).
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
@@ -2581,7 +2651,9 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   const tab = await chrome.tabs.get(tabId).catch(() => undefined);
   const a = decideBinding(bindingState(), { kind: 'activated', tabId, url: tab?.url });
   const key = sessionKeyFromUrl(tab?.url);
-  setActiveTenant(key ? sessionKeyStr(key) : null);
+  const activeKey = key ? sessionKeyStr(key) : null;
+  trackTabSessionKey(tabId, activeKey);
+  setActiveTenant(activeKey);
   // Hide/show the panel per-tab: only F5 XC tenant tabs get it.
   void applySidePanelGate(tabId, tab?.url);
   // Phase 0a: record activations that WOULD bind a console tab, with the WS
@@ -2618,14 +2690,32 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   // Re-gate the panel when a tab navigates (e.g. blank tab → console, or away).
   void applySidePanelGate(tabId, changeInfo.url);
   const key2 = sessionKeyFromUrl(changeInfo.url);
-  setActiveTenant(key2 ? sessionKeyStr(key2) : null);
+  const activeKey2 = key2 ? sessionKeyStr(key2) : null;
+  trackTabSessionKey(tabId, activeKey2);
+  setActiveTenant(activeKey2);
   const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
   if (a.action === 'unbind') await setControlledTab(undefined);
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   latestApiCapture.delete(tabId);
+  // Capture the closed tab's tenant key BEFORE pruning — onRemoved has no URL.
+  const closedKey = tabSessionKeys.get(tabId);
+  tabSessionKeys.delete(tabId);
   const a = decideBinding(bindingState(), { kind: 'removed', tabId });
   if (a.action === 'unbind') await setControlledTab(undefined);
   broadcastToChatPanels({ type: 'tab_closed', tabId }); // panel prunes that tab's session
+  // Last tab for this tenant just closed → ask the manager to reap its worker.
+  if (closedKey && !manualPortPinned) {
+    const tabs = await chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]);
+    const remainingKeys = tabs
+      .map((t) => {
+        const k = sessionKeyFromUrl(t.url);
+        return k ? sessionKeyStr(k) : null;
+      })
+      .filter((k): k is string => k !== null);
+    if (hasNoRemainingTenantTab(remainingKeys, closedKey)) {
+      nmSend({ type: 'release', tenantKey: closedKey });
+    }
+  }
 });

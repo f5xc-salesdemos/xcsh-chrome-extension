@@ -10,10 +10,10 @@ import {
   tenantToPort,
 } from '../src/bridge-discovery';
 
-function reg(...entries: Array<[number, string | null, string | null, number]>): BridgeRegistry {
+function reg(...entries: Array<[number, string | null, string | null, number, boolean?]>): BridgeRegistry {
   const m: BridgeRegistry = new Map();
-  for (const [port, tenant, env, lastSeen] of entries) {
-    m.set(port, { port, tenant, env, sessionId: `s-${port}`, lastSeen });
+  for (const [port, tenant, env, lastSeen, contextBound = false] of entries) {
+    m.set(port, { port, tenant, env, sessionId: `s-${port}`, contextBound, lastSeen });
   }
   return m;
 }
@@ -47,8 +47,11 @@ describe('bridge-discovery', () => {
     expect(stalePorts(m, now, 30_000)).toEqual([19222]);
   });
 
-  test('liveTenants lists session keys with a tenant+env', () => {
-    const m = reg([19222, 'alpha', 'staging', 0], [19223, null, null, 0]);
-    expect(liveTenants(m)).toEqual(['alpha|staging']);
+  test('liveTenants lists session keys with a tenant+env and their contextBound state', () => {
+    const m = reg([19222, 'alpha', 'staging', 0, true], [19223, null, null, 0], [19224, 'beta', 'production', 0]);
+    expect(liveTenants(m)).toEqual([
+      { tenant: 'alpha|staging', contextBound: true },
+      { tenant: 'beta|production', contextBound: false },
+    ]);
   });
 });

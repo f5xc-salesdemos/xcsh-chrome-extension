@@ -21,8 +21,18 @@ export interface BridgeInfo {
   tenant: string | null;
   env: string | null;
   sessionId: string | null;
+  /** Whether this bridge's xcsh worker has an active stored context (from hello_ack). */
+  contextBound: boolean;
   /** Epoch ms of the last inbound frame on this socket. */
   lastSeen: number;
+}
+
+/** A session key ("tenant|env") backed by a live bridge, plus its context state. */
+export interface LiveTenant {
+  /** Session key: "tenant|env". */
+  tenant: string;
+  /** Whether that bridge's worker has an active stored context. */
+  contextBound: boolean;
 }
 
 export type BridgeRegistry = Map<number, BridgeInfo>;
@@ -49,7 +59,12 @@ export function stalePorts(reg: BridgeRegistry, now: number, ttlMs: number): num
   return out;
 }
 
-/** Session keys ("tenant|env") currently backed by a live bridge. */
-export function liveTenants(reg: BridgeRegistry): string[] {
-  return [...tenantToPort(reg).keys()];
+/** Session keys ("tenant|env") currently backed by a live bridge, each with the
+ * context-bound state its bridge last reported (last writer wins per key). */
+export function liveTenants(reg: BridgeRegistry): LiveTenant[] {
+  const out = new Map<string, boolean>();
+  for (const info of reg.values()) {
+    if (info.tenant && info.env) out.set(`${info.tenant}|${info.env}`, info.contextBound);
+  }
+  return [...out].map(([tenant, contextBound]) => ({ tenant, contextBound }));
 }
