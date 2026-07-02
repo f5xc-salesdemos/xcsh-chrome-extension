@@ -217,6 +217,12 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
     params: empty,
   },
   {
+    name: 'diag_bridges',
+    summary: 'List discovered xcsh bridges (port, tenant, env, sessionId, lastSeen) for multi-session diagnostics.',
+    category: 'read',
+    params: empty,
+  },
+  {
     name: 'capture_login_flow',
     summary: 'Diagnostic: captured login redirect chain annotated with tenant/env (Phase 0b).',
     category: 'read',

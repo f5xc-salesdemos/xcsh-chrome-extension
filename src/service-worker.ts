@@ -648,6 +648,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return; // synchronous response
   }
 
+  if (msg.type === 'bridges_request') {
+    sendResponse({ bridges: [...registry.values()] });
+    return; // synchronous response
+  }
+
   if (msg.type === 'stop_agent') {
     stopAgent();
     return;
@@ -803,6 +808,7 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
   read_console: readConsole,
   read_network: readNetwork,
   diag_suspension: diagSuspension,
+  diag_bridges: () => [...registry.values()],
   capture_login_flow: captureLoginFlow,
   wait_for_api_response: waitForApiResponse,
   file_upload: fileUpload,
