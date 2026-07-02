@@ -19,6 +19,7 @@ import {
   isConsoleUrl,
   isLinkStale,
   sessionKeyFromUrl,
+  sessionKeyStr,
   shouldAnnounceBind,
 } from './tab-binding';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
@@ -440,6 +441,14 @@ function ensureTenantSocket(sessionKey: string | null): void {
   if (portForTenant(registry, sessionKey) === undefined) scanRange();
 }
 
+/** Point the active socket at a tenant's bridge — only when idle, so an
+ * in-flight turn keeps routing to the socket it started on (Phase-3 pinning). */
+function setActiveTenant(sessionKey: string | null): void {
+  if (isInFlight() || turnToPort.size > 0) return; // a turn owns routing
+  ensureTenantSocket(sessionKey);
+  activePort = portForTenant(registry, sessionKey);
+}
+
 function connectPort(port: number): void {
   const existing = sockets.get(port);
   if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) return;
@@ -650,21 +659,18 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
     if (m.type === 'chat_request') {
-      if (!anyOpen()) {
-        port.postMessage({ type: 'chat_error', id: m.id, error: 'xcsh not connected — start the xcsh CLI' });
+      const target = activePort;
+      if (target === undefined || sockets.get(target)?.readyState !== WebSocket.OPEN) {
+        port.postMessage({ type: 'chat_error', id: m.id, error: 'No xcsh running for this tenant — start the xcsh CLI in that context' });
         return;
       }
       turnToPort.set(m.id, port);
-      // Forward to the bridge as-is — buildChatRequest in the panel already
-      // produces the correct shape (type 'chat_request', omitting history_hint
-      // when absent). No reconstruction needed.
-      sendActive(m);
+      turnToBridgePort.set(m.id, target); // pin this turn to its origin socket
+      sendTo(target, m);
       return;
     }
     if (m.type === 'chat_stop') {
-      // Forward stop to the bridge; do NOT delete the turn port — the bridge sends
-      // a terminal chat_done/chat_error that the existing inbound routing handles.
-      sendActive({ type: 'chat_stop', id: m.id });
+      sendTo(turnToBridgePort.get(m.id) ?? activePort, { type: 'chat_stop', id: m.id });
       return;
     }
     if (m.type === 'get_page_context') {
@@ -2487,6 +2493,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   const tab = await chrome.tabs.get(tabId).catch(() => undefined);
   const a = decideBinding(bindingState(), { kind: 'activated', tabId, url: tab?.url });
   const key = sessionKeyFromUrl(tab?.url);
+  setActiveTenant(key ? sessionKeyStr(key) : null);
   // Hide/show the panel per-tab: only F5 XC tenant tabs get it.
   void applySidePanelGate(tabId, tab?.url);
   // Phase 0a: record activations that WOULD bind a console tab, with the WS
@@ -2522,6 +2529,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.url === undefined) return;
   // Re-gate the panel when a tab navigates (e.g. blank tab → console, or away).
   void applySidePanelGate(tabId, changeInfo.url);
+  const key2 = sessionKeyFromUrl(changeInfo.url);
+  setActiveTenant(key2 ? sessionKeyStr(key2) : null);
   const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
   if (a.action === 'unbind') await setControlledTab(undefined);
 });
