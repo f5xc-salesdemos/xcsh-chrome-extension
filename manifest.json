@@ -25,7 +25,8 @@
     "storage",
     "alarms",
     "sidePanel",
-    "tabGroups"
+    "tabGroups",
+    "nativeMessaging"
   ],
   "host_permissions": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*", "<all_urls>"],
   "storage": {
