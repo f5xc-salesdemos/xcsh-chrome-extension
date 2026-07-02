@@ -264,6 +264,7 @@ function failActiveTurns(error: string): void {
       /* ignore */
     }
     turnToPort.delete(id);
+    turnToBridgePort.delete(id);
   }
 }
 
@@ -452,6 +453,7 @@ function setActiveTenant(sessionKey: string | null): void {
 }
 
 function connectPort(port: number): void {
+  if (manualPortPinned && port !== bridgePort) return; // pinned mode: only the pinned port may (re)connect
   const existing = sockets.get(port);
   if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) return;
   try {
@@ -520,6 +522,8 @@ function onMessage(msg: any, sourcePort: number): void {
       // Major mismatch — close and forget this socket rather than trust it.
       try { sockets.get(sourcePort)?.close(); } catch {}
       sockets.delete(sourcePort);
+      registry.delete(sourcePort);
+      knownPorts.delete(sourcePort); // incompatible bridge: don't fast-reconnect (avoids ~1.5s storm)
       return;
     }
     const info: BridgeInfo = {
@@ -706,7 +710,7 @@ chrome.runtime.onConnect.addListener((port) => {
   });
   port.onDisconnect.addListener(() => {
     chatPanels.delete(port);
-    for (const [id, p] of turnToPort) if (p === port) turnToPort.delete(id);
+    for (const [id, p] of turnToPort) if (p === port) { turnToPort.delete(id); turnToBridgePort.delete(id); }
   });
   // Greet with current connection status so the panel can render its dot.
   port.postMessage({ type: 'status', connected: anyOpen() });
